@@ -1,0 +1,33 @@
+version: "3.9"
+services:
+  localstack:
+    image: localstack/localstack:3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=sqs,s3,dynamodb
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - ./infra/localstack/init.sh:/etc/localstack/init/ready.d/init.sh
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - .env.example
+    environment:
+      - PORT=3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      - localstack
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file:
+      - .env.example
+    depends_on:
+      - localstack

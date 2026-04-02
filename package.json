@@ -1,0 +1,27 @@
+{
+  "name": "tag-relay",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces build",
+    "dev:all": "bash ./scripts/dev-all.sh",
+    "dev:api": "npm run -w @tag-relay/api dev",
+    "dev:worker": "npm run -w @tag-relay/worker dev",
+    "dev:web": "npm run -w @tag-relay/web-nextjs dev",
+    "lint": "npm run --workspaces lint",
+    "test": "npm run --workspaces test",
+    "aws:bootstrap": "bash ./scripts/bootstrap-aws.sh",
+    "aws:setup-secrets": "bash ./scripts/setup-secrets-eu.sh",
+    "deploy:production": "bash ./scripts/deploy-production.sh",
+    "deploy:quick": "bash ./scripts/quick-deploy.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.4"
+  }
+}

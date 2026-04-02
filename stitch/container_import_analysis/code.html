@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Container Import &amp; Analysis | ServerGTM</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&amp;family=Space+Grotesk:wght@400;500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary-fixed": "#ffdad4",
+              "surface-bright": "#393939",
+              "outline-variant": "#5d3f3a",
+              "outline": "#ad8881",
+              "on-tertiary-fixed-variant": "#454747",
+              "surface-container": "#20201f",
+              "on-tertiary": "#2f3131",
+              "tertiary": "#c6c6c7",
+              "surface-tint": "#ffb4a7",
+              "secondary-fixed-dim": "#5fde8f",
+              "on-secondary-fixed": "#00210e",
+              "surface-container-lowest": "#0e0e0e",
+              "on-surface-variant": "#e6bdb6",
+              "surface-variant": "#353535",
+              "on-tertiary-fixed": "#1a1c1c",
+              "on-secondary-container": "#003117",
+              "inverse-on-surface": "#313030",
+              "on-background": "#e5e2e1",
+              "tertiary-fixed-dim": "#c6c6c7",
+              "on-primary-fixed-variant": "#910b00",
+              "surface-container-high": "#2a2a2a",
+              "inverse-surface": "#e5e2e1",
+              "surface-container-low": "#1c1b1b",
+              "tertiary-container": "#909191",
+              "error-container": "#93000a",
+              "secondary": "#5fde8f",
+              "primary-fixed-dim": "#ffb4a7",
+              "on-primary": "#670500",
+              "on-secondary-fixed-variant": "#00522b",
+              "on-secondary": "#00391c",
+              "primary": "#ffb4a7",
+              "background": "#131313",
+              "error": "#ffb4ab",
+              "secondary-fixed": "#7dfba9",
+              "on-error-container": "#ffdad6",
+              "on-tertiary-container": "#282a2a",
+              "inverse-primary": "#bd1100",
+              "surface-dim": "#131313",
+              "secondary-container": "#15a65e",
+              "surface-container-highest": "#353535",
+              "primary-container": "#ff553c",
+              "on-surface": "#e5e2e1",
+              "on-error": "#690005",
+              "surface": "#131313",
+              "on-primary-fixed": "#400200",
+              "on-primary-container": "#5a0400",
+              "tertiary-fixed": "#e2e2e2"
+            },
+            fontFamily: {
+              "headline": ["Inter"],
+              "body": ["Inter"],
+              "label": ["Space Grotesk"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      body { background-color: #131313; color: #e5e2e1; font-family: 'Inter', sans-serif; }
+      .glass-effect { backdrop-filter: blur(24px); }
+    </style>
+</head>
+<body class="selection:bg-primary-container selection:text-white">
+<!-- TopNavBar Implementation from JSON -->
+<nav class="fixed top-0 w-full z-50 bg-[#131313]/80 backdrop-blur-xl">
+<div class="flex justify-between items-center px-8 py-4 max-w-[1440px] mx-auto">
+<div class="flex items-center gap-8">
+<span class="text-xl font-bold tracking-tighter text-white">ServerGTM</span>
+<div class="hidden md:flex gap-6 items-center">
+<a class="text-white/70 hover:text-white transition-colors duration-300 font-label" href="#">Product</a>
+<a class="text-white/70 hover:text-white transition-colors duration-300 font-label" href="#">Solutions</a>
+<a class="text-white/70 hover:text-white transition-colors duration-300 font-label" href="#">Pricing</a>
+<a class="text-white/70 hover:text-white transition-colors duration-300 font-label" href="#">Docs</a>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-white/70 hover:text-white transition-colors duration-300 font-label">Sign In</button>
+<button class="bg-[#F63A22] text-white px-5 py-2 rounded-xl font-semibold active:scale-95 duration-200">Get Started</button>
+</div>
+</div>
+</nav>
+<main class="pt-24 pb-16 min-h-screen flex max-w-[1440px] mx-auto px-8 gap-12">
+<!-- Sidebar Progress Stepper -->
+<aside class="w-72 hidden md:block">
+<div class="sticky top-32 space-y-12">
+<div class="space-y-8">
+<div class="flex items-center gap-4 group">
+<div class="w-10 h-10 rounded-full border border-secondary text-secondary flex items-center justify-center font-label font-bold bg-secondary/10">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+<div class="flex flex-col">
+<span class="text-white/40 font-label text-xs uppercase tracking-widest">Step 01</span>
+<span class="font-bold text-white/50">Connect</span>
+</div>
+</div>
+<div class="relative flex items-center gap-4 group">
+<!-- Vertical line -->
+<div class="absolute -top-10 left-5 w-[1px] h-8 bg-outline-variant"></div>
+<div class="w-10 h-10 rounded-full border-2 border-[#F63A22] text-[#F63A22] flex items-center justify-center font-label font-bold">
+                            02
+                        </div>
+<div class="flex flex-col">
+<span class="text-[#F63A22] font-label text-xs uppercase tracking-widest">Active</span>
+<span class="font-bold text-white">Select</span>
+</div>
+</div>
+<div class="relative flex items-center gap-4 group opacity-40">
+<!-- Vertical line -->
+<div class="absolute -top-10 left-5 w-[1px] h-8 bg-outline-variant"></div>
+<div class="w-10 h-10 rounded-full border border-outline text-outline flex items-center justify-center font-label font-bold">
+                            03
+                        </div>
+<div class="flex flex-col">
+<span class="text-white font-label text-xs uppercase tracking-widest">Upcoming</span>
+<span class="font-bold text-white">Analyze</span>
+</div>
+</div>
+</div>
+<div class="p-6 rounded-lg bg-surface-container-low border border-outline-variant/10">
+<h4 class="font-label text-xs uppercase tracking-widest text-[#F63A22] mb-3">System Note</h4>
+<p class="text-sm text-on-surface-variant leading-relaxed">Ensure you have admin permissions on the Google Account to view private GTM containers.</p>
+</div>
+</div>
+</aside>
+<!-- Main Flow Canvas -->
+<section class="flex-1">
+<header class="mb-12">
+<h1 class="text-5xl font-bold tracking-tight text-white mb-4">Select Container</h1>
+<p class="text-on-surface-variant text-lg max-w-2xl leading-relaxed">Choose the GTM containers you wish to analyze for server-side migration. We'll perform a deep technical audit on each.</p>
+</header>
+<!-- Container Table (Asymmetric Technical UI) -->
+<div class="bg-surface-container rounded-lg overflow-hidden border border-outline-variant/10">
+<div class="grid grid-cols-12 bg-surface-container-highest/50 px-6 py-4 border-b border-outline-variant/10">
+<div class="col-span-1 flex items-center">
+<input class="w-4 h-4 rounded border-outline-variant bg-surface-container text-[#F63A22] focus:ring-[#F63A22]" type="checkbox"/>
+</div>
+<div class="col-span-5 font-label text-xs uppercase tracking-widest text-white/50">Container Name</div>
+<div class="col-span-3 font-label text-xs uppercase tracking-widest text-white/50 text-right">Account ID</div>
+<div class="col-span-3 font-label text-xs uppercase tracking-widest text-white/50 text-right">Last Updated</div>
+</div>
+<div class="divide-y divide-outline-variant/10">
+<!-- Row 1 -->
+<div class="grid grid-cols-12 px-6 py-6 hover:bg-surface-container-high transition-colors items-center group">
+<div class="col-span-1">
+<input checked="" class="w-4 h-4 rounded border-outline-variant bg-surface-container text-[#F63A22] focus:ring-[#F63A22]" type="checkbox"/>
+</div>
+<div class="col-span-5 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container/20 flex items-center justify-center">
+<span class="material-symbols-outlined text-[#F63A22] text-sm">developer_board</span>
+</div>
+<span class="font-semibold text-white">Main Web Production</span>
+</div>
+<div class="col-span-3 text-right">
+<code class="text-xs bg-surface-container-lowest px-2 py-1 rounded text-secondary font-mono">GTM-P82K9LX</code>
+</div>
+<div class="col-span-3 text-right text-on-surface-variant text-sm">
+                            2 hours ago
+                        </div>
+</div>
+<!-- Row 2 -->
+<div class="grid grid-cols-12 px-6 py-6 hover:bg-surface-container-high transition-colors items-center group">
+<div class="col-span-1">
+<input class="w-4 h-4 rounded border-outline-variant bg-surface-container text-[#F63A22] focus:ring-[#F63A22]" type="checkbox"/>
+</div>
+<div class="col-span-5 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-white/40 text-sm">layers</span>
+</div>
+<span class="font-semibold text-white">Staging / Development</span>
+</div>
+<div class="col-span-3 text-right">
+<code class="text-xs bg-surface-container-lowest px-2 py-1 rounded text-white/40 font-mono">GTM-L2N9M1X</code>
+</div>
+<div class="col-span-3 text-right text-on-surface-variant text-sm">
+                            Yesterday, 14:20
+                        </div>
+</div>
+<!-- Row 3 -->
+<div class="grid grid-cols-12 px-6 py-6 hover:bg-surface-container-high transition-colors items-center group">
+<div class="col-span-1">
+<input checked="" class="w-4 h-4 rounded border-outline-variant bg-surface-container text-[#F63A22] focus:ring-[#F63A22]" type="checkbox"/>
+</div>
+<div class="col-span-5 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container/20 flex items-center justify-center">
+<span class="material-symbols-outlined text-[#F63A22] text-sm">shopping_cart</span>
+</div>
+<span class="font-semibold text-white">E-commerce Funnel</span>
+</div>
+<div class="col-span-3 text-right">
+<code class="text-xs bg-surface-container-lowest px-2 py-1 rounded text-secondary font-mono">GTM-Z44B9PX</code>
+</div>
+<div class="col-span-3 text-right text-on-surface-variant text-sm">
+                            Nov 12, 2024
+                        </div>
+</div>
+</div>
+</div>
+<div class="mt-8 flex justify-between items-center">
+<button class="flex items-center gap-2 text-white/50 hover:text-white transition-colors group">
+<span class="material-symbols-outlined group-hover:-translate-x-1 transition-transform">arrow_back</span>
+<span class="font-label">Change Account</span>
+</button>
+<div class="flex items-center gap-6">
+<span class="text-on-surface-variant text-sm font-label">2 Containers Selected</span>
+<button class="bg-[#F63A22] text-white px-8 py-4 rounded-xl font-bold tracking-tight hover:brightness-110 active:scale-95 transition-all shadow-xl shadow-[#F63A22]/10 flex items-center gap-3">
+                        Analyze Readiness
+                        <span class="material-symbols-outlined text-sm">query_stats</span>
+</button>
+</div>
+</div>
+</section>
+</main>
+<!-- Visual Polish: Decorative Element -->
+<div class="fixed bottom-0 right-0 p-12 pointer-events-none opacity-20">
+<div class="w-96 h-96 bg-primary-container rounded-full blur-[120px]"></div>
+</div>
+<!-- Footer Implementation -->
+<footer class="bg-[#0e0e0e] w-full py-16 px-8 mt-24">
+<div class="grid grid-cols-2 md:grid-cols-4 gap-12 max-w-[1440px] mx-auto">
+<div class="col-span-2">
+<span class="text-lg font-bold text-white mb-4 block">ServerGTM Technical Atelier.</span>
+<p class="text-white/40 text-sm font-body max-w-sm leading-relaxed">Enterprise-grade server-side tracking infrastructure. Built for performance, security, and absolute precision.</p>
+</div>
+<div class="flex flex-col gap-3">
+<span class="text-[#F63A22] font-label text-xs uppercase tracking-widest mb-2">Legal</span>
+<a class="text-white/40 hover:text-[#F63A22] transition-colors text-sm" href="#">Privacy Policy</a>
+<a class="text-white/40 hover:text-[#F63A22] transition-colors text-sm" href="#">Terms of Service</a>
+</div>
+<div class="flex flex-col gap-3">
+<span class="text-[#F63A22] font-label text-xs uppercase tracking-widest mb-2">System</span>
+<a class="text-white/40 hover:text-[#F63A22] transition-colors text-sm" href="#">Security</a>
+<a class="text-white/40 hover:text-[#F63A22] transition-colors text-sm" href="#">Status</a>
+</div>
+</div>
+<div class="max-w-[1440px] mx-auto mt-16 pt-8 border-t border-white/5">
+<span class="text-white/40 text-xs font-label">© 2024 ServerGTM Technical Atelier. All rights reserved.</span>
+</div>
+</footer>
+</body></html>

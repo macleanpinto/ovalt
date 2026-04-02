@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Migration Workspace | Technical Atelier</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=Space+Grotesk:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "secondary-container": "#15a65e",
+              "on-primary-fixed-variant": "#910b00",
+              "on-error": "#690005",
+              "secondary-fixed": "#7dfba9",
+              "tertiary-fixed-dim": "#c6c6c7",
+              "primary-fixed-dim": "#ffb4a7",
+              "background": "#131313",
+              "on-secondary-container": "#003117",
+              "on-tertiary-fixed": "#1a1c1c",
+              "on-error-container": "#ffdad6",
+              "on-primary-fixed": "#400200",
+              "tertiary-container": "#909191",
+              "surface-bright": "#393939",
+              "tertiary-fixed": "#e2e2e2",
+              "inverse-surface": "#e5e2e1",
+              "on-secondary-fixed-variant": "#00522b",
+              "error-container": "#93000a",
+              "surface-tint": "#ffb4a7",
+              "primary-container": "#ff553c",
+              "on-primary": "#670500",
+              "secondary": "#5fde8f",
+              "surface-container-high": "#2a2a2a",
+              "on-surface": "#e5e2e1",
+              "on-background": "#e5e2e1",
+              "inverse-on-surface": "#313030",
+              "surface": "#131313",
+              "surface-container-lowest": "#0e0e0e",
+              "on-tertiary-fixed-variant": "#454747",
+              "on-tertiary": "#2f3131",
+              "on-surface-variant": "#e6bdb6",
+              "primary": "#ffb4a7",
+              "secondary-fixed-dim": "#5fde8f",
+              "surface-variant": "#353535",
+              "outline-variant": "#5d3f3a",
+              "error": "#ffb4ab",
+              "surface-dim": "#131313",
+              "surface-container-low": "#1c1b1b",
+              "primary-fixed": "#ffdad4",
+              "outline": "#ad8881",
+              "surface-container-highest": "#353535",
+              "on-primary-container": "#5a0400",
+              "on-secondary": "#00391c",
+              "on-tertiary-container": "#282a2a",
+              "inverse-primary": "#bd1100",
+              "surface-container": "#20201f",
+              "tertiary": "#c6c6c7",
+              "on-secondary-fixed": "#00210e"
+            },
+            fontFamily: {
+              "headline": ["Inter"],
+              "body": ["Inter"],
+              "label": ["Space Grotesk"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 4px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #353535;
+        border-radius: 10px;
+      }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body selection:bg-primary/30 selection:text-primary min-h-screen flex flex-col">
+<!-- TopNavBar (Shared Component) -->
+<nav class="fixed top-0 w-full z-50 bg-[#131313]/80 backdrop-blur-xl shadow-[0_8px_32px_0_rgba(0,0,0,0.4)]">
+<div class="flex justify-between items-center px-8 py-4 max-w-screen-2xl mx-auto">
+<div class="flex items-center gap-8">
+<span class="text-xl font-bold tracking-tighter text-white font-headline">Technical Atelier</span>
+<div class="hidden md:flex gap-6 font-Inter tracking-tight font-medium text-sm">
+<a class="text-gray-400 hover:text-white transition-colors" href="#">Product</a>
+<a class="text-gray-400 hover:text-white transition-colors" href="#">Solutions</a>
+<a class="text-gray-400 hover:text-white transition-colors" href="#">Pricing</a>
+<a class="text-white font-bold border-b-2 border-[#F63A22] pb-1" href="#">Docs</a>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<div class="hidden sm:flex items-center bg-surface-container px-3 py-1.5 rounded-lg border border-outline-variant/20">
+<span class="material-symbols-outlined text-gray-500 text-sm" style="font-size: 18px;">search</span>
+<span class="text-gray-500 text-xs ml-2 font-label">Search Workspace...</span>
+</div>
+<button class="bg-[#F63A22] text-white px-5 py-2 text-sm font-bold rounded-xl active:scale-95 duration-150 transition-all hover:brightness-110">Get Started</button>
+</div>
+</div>
+</nav>
+<!-- Main Workspace Area -->
+<main class="flex-grow pt-20 pb-24 px-8 max-w-screen-2xl mx-auto w-full flex flex-col gap-6">
+<!-- Migration Hub Header -->
+<header class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 pb-4">
+<div class="space-y-1">
+<div class="flex items-center gap-3">
+<h1 class="text-3xl font-extrabold tracking-tighter font-headline text-white">Migration Hub</h1>
+<span class="bg-secondary/10 text-secondary px-3 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest border border-secondary/20 flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span>
+                        In Progress
+                    </span>
+</div>
+<div class="flex items-center gap-2 text-gray-400 font-label text-sm">
+<span class="material-symbols-outlined text-sm">settings_input_component</span>
+<span>Container:</span>
+<span class="text-primary font-medium tracking-tight">Main Web Production</span>
+<span class="mx-1 opacity-20">|</span>
+<span class="material-symbols-outlined text-sm">history</span>
+<span>Last imported 2h ago</span>
+</div>
+</div>
+<div class="flex gap-3">
+<button class="bg-surface-container-highest px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-surface-bright transition-colors">
+<span class="material-symbols-outlined text-lg">download</span>
+                    Export Blueprint
+                </button>
+<button class="bg-surface-container-highest px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-surface-bright transition-colors">
+<span class="material-symbols-outlined text-lg">refresh</span>
+                    Re-scan Container
+                </button>
+</div>
+</header>
+<!-- Split Pane View -->
+<div class="grid grid-cols-12 gap-6 flex-grow min-h-[600px]">
+<!-- Left Side: Client-Side Elements -->
+<aside class="col-span-12 lg:col-span-4 flex flex-col gap-4">
+<div class="bg-surface-container-low rounded-lg p-1 h-full flex flex-col overflow-hidden">
+<div class="px-4 py-3 border-b border-white/5 flex justify-between items-center">
+<h2 class="font-label text-xs font-bold uppercase tracking-widest text-gray-400">Detected Elements</h2>
+<span class="text-[10px] font-mono text-gray-500">Total: 24</span>
+</div>
+<div class="flex-grow overflow-y-auto custom-scrollbar p-2 space-y-1">
+<!-- Element Item (Selected) -->
+<div class="bg-surface-container-highest border-l-2 border-primary p-3 rounded-md flex items-center gap-4 group cursor-pointer">
+<div class="w-8 h-8 rounded bg-primary/10 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">analytics</span>
+</div>
+<div class="flex-grow min-w-0">
+<div class="text-sm font-bold text-white truncate">GA4 - Purchase Event</div>
+<div class="text-[10px] font-mono text-gray-500 uppercase">Tag • Client-Side</div>
+</div>
+<div class="text-[9px] font-bold text-secondary flex items-center gap-1">
+<span class="material-symbols-outlined text-xs">check_circle</span>
+                                READY
+                            </div>
+</div>
+<!-- Element Item -->
+<div class="hover:bg-white/5 p-3 rounded-md flex items-center gap-4 transition-all cursor-pointer">
+<div class="w-8 h-8 rounded bg-gray-500/10 flex items-center justify-center text-gray-400">
+<span class="material-symbols-outlined">ads_click</span>
+</div>
+<div class="flex-grow min-w-0">
+<div class="text-sm font-medium text-gray-300 truncate">FB Pixel - Lead</div>
+<div class="text-[10px] font-mono text-gray-500 uppercase">Tag • Client-Side</div>
+</div>
+<div class="text-[9px] font-bold text-primary flex items-center gap-1">
+<span class="material-symbols-outlined text-xs">priority_high</span>
+                                MAPPING REQ.
+                            </div>
+</div>
+<!-- Element Item -->
+<div class="hover:bg-white/5 p-3 rounded-md flex items-center gap-4 transition-all cursor-pointer">
+<div class="w-8 h-8 rounded bg-gray-500/10 flex items-center justify-center text-gray-400">
+<span class="material-symbols-outlined">data_object</span>
+</div>
+<div class="flex-grow min-w-0">
+<div class="text-sm font-medium text-gray-300 truncate">dl_user_id</div>
+<div class="text-[10px] font-mono text-gray-500 uppercase">Variable • JS</div>
+</div>
+<div class="text-[9px] font-bold text-secondary flex items-center gap-1">
+<span class="material-symbols-outlined text-xs">check_circle</span>
+                                READY
+                            </div>
+</div>
+<!-- Element Item -->
+<div class="hover:bg-white/5 p-3 rounded-md flex items-center gap-4 transition-all cursor-pointer">
+<div class="w-8 h-8 rounded bg-gray-500/10 flex items-center justify-center text-gray-400">
+<span class="material-symbols-outlined">bolt</span>
+</div>
+<div class="flex-grow min-w-0">
+<div class="text-sm font-medium text-gray-300 truncate">All Pages</div>
+<div class="text-[10px] font-mono text-gray-500 uppercase">Trigger • PageView</div>
+</div>
+<div class="text-[9px] font-bold text-secondary flex items-center gap-1">
+<span class="material-symbols-outlined text-xs">check_circle</span>
+                                READY
+                            </div>
+</div>
+<!-- Repeat/Filler -->
+<div class="hover:bg-white/5 p-3 rounded-md flex items-center gap-4 transition-all cursor-pointer">
+<div class="w-8 h-8 rounded bg-gray-500/10 flex items-center justify-center text-gray-400">
+<span class="material-symbols-outlined">ads_click</span>
+</div>
+<div class="flex-grow min-w-0">
+<div class="text-sm font-medium text-gray-300 truncate">Tiktok Pixel - ATC</div>
+<div class="text-[10px] font-mono text-gray-500 uppercase">Tag • Third Party</div>
+</div>
+<div class="text-[9px] font-bold text-primary flex items-center gap-1">
+<span class="material-symbols-outlined text-xs">priority_high</span>
+                                MAPPING REQ.
+                            </div>
+</div>
+</div>
+</div>
+</aside>
+<!-- Right Side: Server-Side Mapping Editor -->
+<section class="col-span-12 lg:col-span-6 flex flex-col gap-6">
+<div class="bg-surface-container rounded-lg flex flex-col h-full border border-white/5 overflow-hidden">
+<!-- Editor Header -->
+<div class="bg-surface-container-high px-6 py-4 flex justify-between items-center">
+<div class="flex items-center gap-3">
+<div class="bg-primary/20 p-2 rounded text-primary">
+<span class="material-symbols-outlined text-xl">settings_ethernet</span>
+</div>
+<div>
+<h3 class="text-lg font-bold text-white tracking-tight">GA4 - Purchase Event</h3>
+<p class="text-[10px] text-gray-500 font-label uppercase">Server-Side Configuration Blueprint</p>
+</div>
+</div>
+<button class="bg-[#F63A22]/10 text-[#F63A22] border border-[#F63A22]/30 px-4 py-2 rounded-xl text-xs font-bold hover:bg-[#F63A22] hover:text-white transition-all flex items-center gap-2">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">auto_fix_high</span>
+                            Automap Tag
+                        </button>
+</div>
+<!-- Editor Fields -->
+<div class="p-6 flex-grow space-y-8 overflow-y-auto custom-scrollbar">
+<div class="grid grid-cols-2 gap-6">
+<div class="space-y-2">
+<label class="block text-[10px] font-label font-bold text-gray-500 uppercase tracking-widest">Server Client ID</label>
+<div class="bg-surface-container-highest p-3 rounded border border-transparent focus-within:border-primary/40 transition-all">
+<input class="bg-transparent border-none p-0 w-full text-sm font-mono text-secondary focus:ring-0" type="text" value="SGTM-9283-KLA"/>
+</div>
+</div>
+<div class="space-y-2">
+<label class="block text-[10px] font-label font-bold text-gray-500 uppercase tracking-widest">API Version</label>
+<div class="bg-surface-container-highest p-3 rounded border border-transparent">
+<select class="bg-transparent border-none p-0 w-full text-sm font-label text-gray-300 focus:ring-0">
+<option>v2 (Recommended)</option>
+<option>v1 (Legacy)</option>
+</select>
+</div>
+</div>
+</div>
+<div class="space-y-4">
+<div class="flex justify-between items-center">
+<label class="block text-[10px] font-label font-bold text-gray-500 uppercase tracking-widest">Event Parameters Mapping</label>
+<button class="text-[10px] text-primary font-bold uppercase hover:underline">+ Add Field</button>
+</div>
+<div class="space-y-2">
+<!-- Mapping Row -->
+<div class="flex gap-2 items-center">
+<div class="flex-1 bg-surface-container-highest p-2.5 rounded text-[11px] font-mono text-gray-400">client.transaction_id</div>
+<span class="material-symbols-outlined text-gray-600">arrow_right_alt</span>
+<div class="flex-1 bg-surface-container-highest p-2.5 rounded text-[11px] font-mono text-white flex justify-between items-center">
+                                        server.order_id
+                                        <span class="material-symbols-outlined text-[14px] text-gray-500">edit</span>
+</div>
+</div>
+<!-- Mapping Row -->
+<div class="flex gap-2 items-center">
+<div class="flex-1 bg-surface-container-highest p-2.5 rounded text-[11px] font-mono text-gray-400">client.value</div>
+<span class="material-symbols-outlined text-gray-600">arrow_right_alt</span>
+<div class="flex-1 bg-surface-container-highest p-2.5 rounded text-[11px] font-mono text-white flex justify-between items-center">
+                                        server.revenue
+                                        <span class="material-symbols-outlined text-[14px] text-gray-500">edit</span>
+</div>
+</div>
+<!-- Mapping Row -->
+<div class="flex gap-2 items-center">
+<div class="flex-1 bg-surface-container-highest p-2.5 rounded text-[11px] font-mono text-gray-400">client.currency</div>
+<span class="material-symbols-outlined text-gray-600">arrow_right_alt</span>
+<div class="flex-1 bg-surface-container-highest p-2.5 rounded text-[11px] font-mono text-white flex justify-between items-center">
+                                        server.currency_code
+                                        <span class="material-symbols-outlined text-[14px] text-gray-500">edit</span>
+</div>
+</div>
+</div>
+</div>
+<div class="bg-secondary/5 border border-secondary/10 p-4 rounded-lg flex gap-4">
+<span class="material-symbols-outlined text-secondary">info</span>
+<p class="text-xs text-secondary-fixed-dim leading-relaxed">
+<span class="font-bold">Automap Suggestion:</span> This tag matches a standard GA4 Purchase event. Server-side transformation logic will be applied automatically to redact IP addresses and PII.
+                            </p>
+</div>
+</div>
+<!-- Editor Footer -->
+<div class="px-6 py-4 bg-surface-container-low border-t border-white/5 flex justify-end gap-3">
+<button class="px-4 py-2 text-xs font-bold text-gray-500 hover:text-white transition-colors">Discard</button>
+<button class="bg-primary px-6 py-2 rounded-xl text-xs font-bold text-on-primary hover:brightness-110 active:scale-95 transition-all">Save Configuration</button>
+</div>
+</div>
+</section>
+<!-- Sidebar: Live Debugger -->
+<aside class="col-span-12 lg:col-span-2 flex flex-col gap-4">
+<div class="bg-surface-container-lowest border border-white/5 rounded-lg flex flex-col h-full overflow-hidden">
+<div class="px-3 py-3 bg-surface-container-high flex items-center justify-between">
+<span class="text-[10px] font-label font-bold text-gray-400 uppercase tracking-tighter">Live Debugger</span>
+<div class="flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+<span class="text-[9px] font-mono text-secondary">ACTIVE</span>
+</div>
+</div>
+<div class="p-3 font-mono text-[10px] space-y-3 overflow-y-auto custom-scrollbar">
+<div class="text-gray-500">
+<span class="text-secondary">[12:44:01]</span> Connected to server...
+                        </div>
+<div class="text-gray-500">
+<span class="text-secondary">[12:44:05]</span> <span class="text-white">SCAN:</span> Found GTM-K827A
+                        </div>
+<div class="text-gray-500">
+<span class="text-secondary">[12:45:12]</span> <span class="text-primary">MAPPING:</span> purchase_event -&gt; s_purchase
+                        </div>
+<div class="text-gray-500">
+<span class="text-secondary">[12:45:13]</span> Validation successful.
+                        </div>
+<div class="text-gray-500">
+<span class="text-secondary">[12:48:22]</span> Waiting for input...
+                        </div>
+<div class="pt-4 flex justify-center">
+<button class="text-[9px] uppercase font-bold text-gray-600 hover:text-white border-b border-gray-800 pb-0.5">Clear Logs</button>
+</div>
+</div>
+</div>
+<!-- Helper Card -->
+<div class="bg-surface-container-high p-4 rounded-lg space-y-2">
+<h4 class="text-xs font-bold text-white">Need help?</h4>
+<p class="text-[10px] text-gray-400 leading-snug">Review our server-side migration blueprint for custom schema mapping.</p>
+<a class="inline-block text-[10px] text-primary font-bold" href="#">Read Docs →</a>
+</div>
+</aside>
+</div>
+</main>
+<!-- Fixed Action Bar -->
+<div class="fixed bottom-0 left-0 w-full bg-surface-container-lowest/90 backdrop-blur-md border-t border-white/5 z-50">
+<div class="max-w-screen-2xl mx-auto px-8 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+<div class="flex items-center gap-6 w-full md:w-auto">
+<div class="space-y-1 flex-grow">
+<div class="flex justify-between text-[10px] font-label font-bold text-gray-400 uppercase tracking-widest mb-1">
+<span>Migration Progress</span>
+<span>14 of 24 tags</span>
+</div>
+<div class="w-full md:w-64 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-secondary w-[58%] shadow-[0_0_8px_rgba(95,222,143,0.5)]"></div>
+</div>
+</div>
+<div class="hidden sm:block text-[11px] font-mono text-gray-500 bg-surface-container px-3 py-1.5 rounded">
+                    EST. COMPLETION: <span class="text-white">12m</span>
+</div>
+</div>
+<div class="flex gap-4 w-full md:w-auto">
+<button class="flex-1 md:flex-none border border-outline-variant/30 px-6 py-3 rounded-xl text-sm font-bold text-white hover:bg-white/5 transition-all">
+                    Save Draft
+                </button>
+<button class="flex-1 md:flex-none bg-[#F63A22] px-8 py-3 rounded-xl text-sm font-bold text-white shadow-lg shadow-[#F63A22]/20 hover:scale-[1.02] active:scale-[0.98] transition-all">
+                    Generate Server-Side Container
+                </button>
+</div>
+</div>
+</div>
+<!-- Footer (Shared Component) -->
+<footer class="bg-[#0e0e0e] w-full border-t border-white/5 mt-auto">
+<div class="flex flex-col md:flex-row justify-between items-center px-12 py-8 gap-4 font-Inter text-xs tracking-wide uppercase">
+<div class="text-gray-500">© 2024 Technical Atelier. All rights reserved.</div>
+<div class="flex gap-8">
+<a class="text-gray-500 hover:text-[#F63A22] transition-colors" href="#">Privacy Policy</a>
+<a class="text-gray-500 hover:text-[#F63A22] transition-colors" href="#">Terms of Service</a>
+<a class="text-gray-500 hover:text-[#F63A22] transition-colors" href="#">System Status</a>
+<a class="text-gray-500 hover:text-[#F63A22] transition-colors" href="#">Security</a>
+</div>
+</div>
+</footer>
+</body></html>

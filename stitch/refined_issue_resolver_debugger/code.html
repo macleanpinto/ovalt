@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Server-Side GTM Debugger | Issue Resolver</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;family=Space+Grotesk:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-error": "#690005",
+                        "tertiary-container": "#909191",
+                        "on-error-container": "#ffdad6",
+                        "error-container": "#93000a",
+                        "background": "#131313",
+                        "primary": "#ffb4a7",
+                        "surface-bright": "#393939",
+                        "on-tertiary": "#2f3131",
+                        "secondary-fixed": "#7dfba9",
+                        "tertiary-fixed": "#e2e2e2",
+                        "surface-container-lowest": "#0e0e0e",
+                        "on-tertiary-fixed": "#1a1c1c",
+                        "on-primary-fixed-variant": "#910b00",
+                        "error": "#ffb4ab",
+                        "surface-container": "#20201f",
+                        "surface-variant": "#353535",
+                        "inverse-on-surface": "#313030",
+                        "surface": "#131313",
+                        "on-primary-container": "#5a0400",
+                        "tertiary-fixed-dim": "#c6c6c7",
+                        "secondary": "#5fde8f",
+                        "surface-container-highest": "#353535",
+                        "secondary-container": "#15a65e",
+                        "surface-dim": "#131313",
+                        "primary-fixed": "#ffdad4",
+                        "inverse-primary": "#bd1100",
+                        "on-secondary": "#00391c",
+                        "on-primary-fixed": "#400200",
+                        "surface-container-high": "#2a2a2a",
+                        "on-primary": "#670500",
+                        "surface-tint": "#ffb4a7",
+                        "on-secondary-fixed-variant": "#00522b",
+                        "inverse-surface": "#e5e2e1",
+                        "outline": "#ad8881",
+                        "on-secondary-container": "#003117",
+                        "on-tertiary-fixed-variant": "#454747",
+                        "secondary-fixed-dim": "#5fde8f",
+                        "primary-container": "#ff553c",
+                        "on-surface-variant": "#e6bdb6",
+                        "on-surface": "#e5e2e1",
+                        "on-secondary-fixed": "#00210e",
+                        "outline-variant": "#5d3f3a",
+                        "on-background": "#e5e2e1",
+                        "tertiary": "#c6c6c7",
+                        "surface-container-low": "#1c1b1b",
+                        "primary-fixed-dim": "#ffb4a7",
+                        "on-tertiary-container": "#282a2a"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Space Grotesk"],
+                        "mono": ["Geist Mono"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #131313;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #353535;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body selection:bg-primary-container selection:text-white">
+<!-- TopNavBar -->
+<nav class="fixed top-0 w-full z-50 bg-[#131313]/80 backdrop-blur-2xl shadow-[0_32px_64px_-12px_rgba(0,0,0,0.5)]">
+<div class="flex justify-between items-center px-10 h-16 w-full">
+<div class="flex items-center gap-8">
+<span class="text-lg font-black tracking-tighter text-white uppercase font-headline">Server-Side GTM Debugger</span>
+<div class="hidden md:flex items-center gap-6 font-sans tracking-tight text-sm font-medium">
+<a class="text-zinc-400 hover:text-white transition-all duration-300 hover:bg-zinc-800/50 rounded-md px-3 py-2" href="#">Containers</a>
+<a class="text-[#F63A22] font-bold border-b-2 border-[#F63A22] pb-1 hover:bg-zinc-800/50 rounded-t-md px-3 py-2" href="#">Live Logs</a>
+<a class="text-zinc-400 hover:text-white transition-all duration-300 hover:bg-zinc-800/50 rounded-md px-3 py-2" href="#">Network Trace</a>
+<a class="text-zinc-400 hover:text-white transition-all duration-300 hover:bg-zinc-800/50 rounded-md px-3 py-2" href="#">Variables</a>
+<a class="text-zinc-400 hover:text-white transition-all duration-300 hover:bg-zinc-800/50 rounded-md px-3 py-2" href="#">Versions</a>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex gap-2">
+<button class="p-2 text-zinc-400 hover:text-white transition-colors"><span class="material-symbols-outlined">notifications</span></button>
+<button class="p-2 text-zinc-400 hover:text-white transition-colors"><span class="material-symbols-outlined">help_outline</span></button>
+<button class="p-2 text-zinc-400 hover:text-white transition-colors"><span class="material-symbols-outlined">terminal</span></button>
+</div>
+<button class="bg-primary-container hover:opacity-90 text-white font-bold py-2 px-4 rounded-xl text-sm transition-transform active:scale-95">
+                    Deploy Changes
+                </button>
+<div class="h-8 w-8 rounded-full bg-surface-container-highest overflow-hidden border border-outline-variant/30">
+<img alt="Technical Lead Avatar" class="w-full h-full object-cover" data-alt="Close up portrait of a professional technical lead with a clean modern aesthetic" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDqkt5d2dWoy-puQMD4YjWgbddBj-WaTv2CnWj02ZcEGx7DHzfuI2rarvHeCFuvkx9TSUebKU9Tos4S0DpzqjpCzB_R0bApOEvupQEYZRvu9ao_wuw6EKvYpZUNcLghq1E-Spq-HZ9D98Pwo1xtNILcSkYBLPDiNB1hNEOre--fbM9UDofdpYflzJHAu1OcB_L-5gwow_7mDVyrnUXir2eiOiEV_FXr3CdckdzJIaX9ztLKmdVSAA6jlW3RIg_H8qYDaVuU1hqQ9w"/>
+</div>
+</div>
+</div>
+</nav>
+<main class="pt-24 px-10 pb-16 max-w-[1600px] mx-auto min-h-screen">
+<!-- Header: System Health -->
+<header class="mb-10 flex flex-col md:flex-row justify-between items-end gap-6">
+<div class="space-y-1">
+<div class="flex items-center gap-3">
+<span class="font-label text-xs uppercase tracking-widest text-zinc-500">Container Context</span>
+<span class="h-1.5 w-1.5 rounded-full bg-secondary shadow-[0_0_8px_rgba(95,222,143,0.5)]"></span>
+</div>
+<h1 class="text-4xl font-extrabold tracking-tighter font-headline text-on-background">Main Web Production</h1>
+<p class="text-zinc-500 font-label text-sm uppercase">Server Deployment: <span class="text-zinc-300">v2.4.1-stable</span> • Region: <span class="text-zinc-300">europe-west3 (Frankfurt)</span></p>
+</div>
+<div class="flex gap-4">
+<div class="bg-surface-container-low px-6 py-4 rounded-lg border-l-4 border-[#F63A22] flex flex-col min-w-[160px]">
+<span class="text-[#F63A22] font-black text-2xl font-headline">3</span>
+<span class="font-label text-[10px] uppercase tracking-widest text-zinc-400">Critical Errors</span>
+</div>
+<div class="bg-surface-container-low px-6 py-4 rounded-lg border-l-4 border-primary font-headline flex flex-col min-w-[160px]">
+<span class="text-primary font-black text-2xl">5</span>
+<span class="font-label text-[10px] uppercase tracking-widest text-zinc-400">Active Warnings</span>
+</div>
+<div class="bg-surface-container-low px-6 py-4 rounded-lg border-l-4 border-secondary flex flex-col min-w-[160px]">
+<span class="text-secondary font-black text-2xl">99.9%</span>
+<span class="font-label text-[10px] uppercase tracking-widest text-zinc-400">System Uptime</span>
+</div>
+</div>
+</header>
+<div class="grid grid-cols-12 gap-8 items-start">
+<!-- Main Debugger Canvas -->
+<div class="col-span-12 lg:col-span-8 space-y-8">
+<!-- Real-time Trace Visualization -->
+<section class="bg-surface-container rounded-lg p-6 relative overflow-hidden border border-outline-variant/10">
+<div class="flex justify-between items-center mb-8">
+<h2 class="font-label text-xs uppercase tracking-[0.2em] text-zinc-500">Network Topology Trace</h2>
+<span class="text-[10px] font-mono text-secondary bg-secondary/10 px-2 py-0.5 rounded">LIVE FEED</span>
+</div>
+<div class="flex justify-between items-center relative px-10 py-4">
+<!-- Connecting Lines Background -->
+<div class="absolute inset-x-20 top-1/2 h-px bg-gradient-to-r from-secondary/50 via-[#F63A22]/50 to-zinc-800 z-0"></div>
+<!-- Step 1: Client -->
+<div class="relative z-10 flex flex-col items-center gap-3">
+<div class="h-12 w-12 rounded-full bg-surface-container-highest flex items-center justify-center border border-secondary/40 shadow-[0_0_20px_rgba(95,222,143,0.1)]">
+<span class="material-symbols-outlined text-secondary">devices</span>
+</div>
+<span class="font-label text-[10px] uppercase text-zinc-400">Client Device</span>
+</div>
+<div class="material-symbols-outlined text-secondary text-sm">arrow_forward_ios</div>
+<!-- Step 2: SGTM -->
+<div class="relative z-10 flex flex-col items-center gap-3">
+<div class="h-16 w-16 rounded-full bg-surface-container-highest flex items-center justify-center border-2 border-[#F63A22] shadow-[0_0_30px_rgba(246,58,34,0.2)]">
+<span class="material-symbols-outlined text-[#F63A22] text-3xl">dns</span>
+</div>
+<span class="font-label text-[10px] uppercase text-white font-bold">Server Container</span>
+</div>
+<div class="material-symbols-outlined text-zinc-600 text-sm">arrow_forward_ios</div>
+<!-- Step 3: Destination -->
+<div class="relative z-10 flex flex-col items-center gap-3">
+<div class="h-12 w-12 rounded-full bg-surface-container-low flex items-center justify-center border border-outline-variant/30 grayscale opacity-50">
+<span class="material-symbols-outlined text-zinc-400">cloud_done</span>
+</div>
+<span class="font-label text-[10px] uppercase text-zinc-600">Analytics API</span>
+</div>
+</div>
+</section>
+<!-- Diagnostic Log -->
+<section class="bg-surface-container-low rounded-lg overflow-hidden border border-outline-variant/5">
+<div class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center">
+<h2 class="font-label text-xs uppercase tracking-[0.2em] text-zinc-400">Diagnostic Logs</h2>
+<div class="flex gap-4 text-xs font-mono text-zinc-500">
+<span>FILTER: <span class="text-primary cursor-pointer hover:underline">ERRORS ONLY</span></span>
+<span>SORT: <span class="text-zinc-300 cursor-pointer hover:underline">RECENT</span></span>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-mono text-xs">
+<thead>
+<tr class="bg-surface-container-highest/30 text-zinc-500 uppercase font-label tracking-widest">
+<th class="px-6 py-3 font-medium">Timestamp</th>
+<th class="px-6 py-3 font-medium">Event Name</th>
+<th class="px-6 py-3 font-medium">Status</th>
+<th class="px-6 py-3 font-medium">Latency</th>
+<th class="px-6 py-3 font-medium text-right">Details</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/10">
+<!-- Error Row -->
+<tr class="bg-error-container/5 hover:bg-error-container/10 transition-colors group cursor-pointer">
+<td class="px-6 py-4 text-zinc-400">14:02:45.012</td>
+<td class="px-6 py-4 font-bold text-on-background">purchase_event</td>
+<td class="px-6 py-4">
+<span class="text-[#F63A22] font-bold flex items-center gap-1">
+<span class="material-symbols-outlined text-xs">error</span> 502 Bad Gateway
+                                        </span>
+</td>
+<td class="px-6 py-4 text-zinc-400">42ms</td>
+<td class="px-6 py-4 text-right">
+<span class="material-symbols-outlined text-zinc-600 group-hover:text-white transition-colors">unfold_more</span>
+</td>
+</tr>
+<!-- Detailed Expansion Placeholder -->
+<tr class="bg-surface-container-lowest">
+<td class="px-8 py-6" colspan="5">
+<div class="grid grid-cols-2 gap-6">
+<div class="space-y-3">
+<h4 class="font-label text-[10px] uppercase text-zinc-500 tracking-wider">Inbound Request</h4>
+<div class="bg-black/40 p-4 rounded-lg border border-outline-variant/10 text-zinc-300 overflow-auto max-h-48 custom-scrollbar">
+<pre>{
+  "client_id": "GA1.2.98421",
+  "event_name": "purchase",
+  "currency": "EUR",
+  "value": 124.50,
+  "items": [...]
+}</pre>
+</div>
+</div>
+<div class="space-y-3">
+<h4 class="font-label text-[10px] uppercase text-[#F63A22] tracking-wider">Server Exception</h4>
+<div class="bg-error-container/10 p-4 rounded-lg border border-[#F63A22]/20 text-[#ffdad6] overflow-auto max-h-48 custom-scrollbar">
+<pre>Error: Destination unreachable.
+Cause: Missing 'X-GTM-Server-Id' header.
+Response Code: 502
+Stack: /core/dispatch.js:142</pre>
+</div>
+</div>
+</div>
+</td>
+</tr>
+<!-- Warning Row -->
+<tr class="hover:bg-surface-container-highest/20 transition-colors group cursor-pointer">
+<td class="px-6 py-4 text-zinc-400">14:02:43.881</td>
+<td class="px-6 py-4 font-bold text-on-background">page_view</td>
+<td class="px-6 py-4">
+<span class="text-primary font-bold flex items-center gap-1">
+<span class="material-symbols-outlined text-xs">warning</span> 200 OK (Partial)
+                                        </span>
+</td>
+<td class="px-6 py-4 text-zinc-400">12ms</td>
+<td class="px-6 py-4 text-right">
+<span class="material-symbols-outlined text-zinc-600 group-hover:text-white transition-colors">unfold_more</span>
+</td>
+</tr>
+<!-- Success Row -->
+<tr class="hover:bg-surface-container-highest/20 transition-colors group cursor-pointer opacity-60">
+<td class="px-6 py-4 text-zinc-500">14:02:41.205</td>
+<td class="px-6 py-4 font-medium text-zinc-400">scroll_depth</td>
+<td class="px-6 py-4">
+<span class="text-secondary font-medium flex items-center gap-1">
+<span class="material-symbols-outlined text-xs" style="font-variation-settings: 'FILL' 1;">check_circle</span> 200 OK
+                                        </span>
+</td>
+<td class="px-6 py-4 text-zinc-500">8ms</td>
+<td class="px-6 py-4 text-right">
+<span class="material-symbols-outlined text-zinc-600 group-hover:text-white transition-colors">unfold_more</span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+<!-- Issue Resolver Sidebar -->
+<aside class="col-span-12 lg:col-span-4 space-y-6 lg:sticky lg:top-24"><div class="bg-surface-container-low rounded-lg p-1 mb-4 flex flex-col overflow-hidden border border-white/5"><div class="px-4 py-3 border-b border-white/5 flex justify-between items-center"><h2 class="font-label text-xs font-bold uppercase tracking-widest text-gray-400">Resolver Tools</h2></div><div class="px-3 py-2 bg-surface-container-lowest/50 flex gap-2"><div class="flex-grow flex items-center bg-surface-container-highest/50 border border-white/5 rounded px-2 py-1"><span class="material-symbols-outlined text-xs text-gray-500">search</span><input class="bg-transparent border-none p-0 ml-2 text-[10px] text-gray-300 focus:ring-0 w-full font-label" placeholder="Filter issues..." type="text"/></div><button class="p-1 hover:bg-white/5 rounded transition-colors"><span class="material-symbols-outlined text-xs text-gray-500">filter_list</span></button></div></div>
+<div class="bg-surface-container rounded-lg border border-white/5 overflow-hidden shadow-xl mb-6"><div class="bg-surface-container-high px-6 py-4 flex justify-between items-center border-b border-white/5"><div class="flex items-center gap-3"><div class="bg-[#F63A22]/20 p-2 rounded text-[#F63A22]"><span class="material-symbols-outlined text-xl">bolt</span></div><div><h3 class="text-sm font-bold text-white tracking-tight uppercase">Issue Resolver</h3><p class="text-[9px] text-gray-500 font-label uppercase tracking-widest">Active Diagnosis</p></div></div><div class="px-2 py-1 rounded bg-[#F63A22]/10 text-[9px] font-black text-[#F63A22] border border-[#F63A22]/20 flex items-center gap-1 shadow-inner"><span class="material-symbols-outlined text-[12px]">error</span>CRITICAL</div></div><div class="p-6 space-y-6"><div class="space-y-4"><div class="flex justify-between items-start"><span class="text-[9px] font-mono text-gray-500 uppercase tracking-tighter">ANOMALY ID: #ERR-8821</span><span class="text-[8px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400 font-bold uppercase tracking-tighter border border-white/10">AUTH</span></div><p class="text-xs font-medium text-on-surface leading-relaxed">The outbound request to Analytics API is missing the critical authentication header required for this container version.</p></div><div class="space-y-3"><div class="flex justify-between items-center"><label class="block text-[9px] font-label font-bold text-gray-500 uppercase tracking-widest">Suggested Fixes</label></div><div class="space-y-2"><button class="w-full flex items-center justify-between px-4 py-2.5 bg-[#F63A22] text-white rounded-xl group transition-all hover:brightness-110 active:scale-95"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-sm">auto_fix_high</span><span class="text-[10px] font-bold uppercase tracking-tight">Auto-Resolve Header</span></div><span class="material-symbols-outlined text-sm">chevron_right</span></button><button class="w-full flex items-center justify-between px-4 py-2.5 bg-surface-container-highest/50 text-gray-300 rounded-xl border border-white/10 hover:border-white/20 transition-all active:scale-95"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-sm">settings_ethernet</span><span class="text-[10px] font-bold uppercase tracking-tight text-left">Update Endpoint URL</span></div><span class="material-symbols-outlined text-sm">open_in_new</span></button></div></div><div class="pt-4 border-t border-white/5 space-y-3"><div class="flex justify-between items-center text-[9px] font-label uppercase text-gray-500 tracking-widest"><span>Risk Assessment</span><span class="text-secondary flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">check_circle</span>LOW IMPACT</span></div><div class="w-full h-1 bg-surface-container-highest rounded-full overflow-hidden"><div class="h-full bg-secondary w-1/4 shadow-[0_0_8px_rgba(95,222,143,0.5)]"></div></div><p class="text-[9px] text-gray-500 italic leading-snug">"Automated resolution will restart the server instance, causing approximately 200ms latency spike."</p></div></div></div>
+<!-- Technical Metadata Sub-panel -->
+<div class="bg-surface-container-low p-5 rounded-lg border border-white/5 space-y-4"><div class="flex justify-between items-center"><h3 class="font-label text-[9px] font-bold uppercase tracking-[0.15em] text-gray-500">Instance Metadata</h3><span class="text-[8px] font-mono text-secondary bg-secondary/10 px-1.5 py-0.5 rounded border border-secondary/20">ACTIVE</span></div><div class="grid grid-cols-2 gap-y-4 gap-x-2"><div class="space-y-1"><span class="text-[9px] font-mono text-gray-600 block uppercase tracking-tighter">Server ID</span><span class="text-xs font-mono text-gray-300">node-fx-8821</span></div><div class="space-y-1"><span class="text-[9px] font-mono text-gray-600 block uppercase tracking-tighter">CPU Load</span><span class="text-xs font-mono text-secondary">12.4%</span></div><div class="space-y-1"><span class="text-[9px] font-mono text-gray-600 block uppercase tracking-tighter">Memory</span><span class="text-xs font-mono text-gray-300">1.2GB / 4GB</span></div><div class="space-y-1"><span class="text-[9px] font-mono text-gray-600 block uppercase tracking-tighter">Uptime</span><span class="text-xs font-mono text-gray-300">14d 02h 11m</span></div></div></div>
+</aside>
+</div>
+</main>
+<!-- Footer -->
+<footer class="w-full py-16 px-10 border-t border-zinc-900/50 bg-[#0e0e0e]">
+<div class="flex flex-col md:flex-row justify-between items-center gap-6 max-w-[1600px] mx-auto">
+<div class="text-zinc-700 font-bold uppercase tracking-[0.15em] text-[10px]">
+                © 2024 TECHNICAL ATELIER SSGTM. ALL RIGHTS RESERVED.
+            </div>
+<div class="flex gap-8 font-mono text-[10px] uppercase tracking-[0.15em]">
+<a class="text-zinc-500 hover:text-[#F63A22] transition-colors hover:underline decoration-[#F63A22] underline-offset-4" href="#">Documentation</a>
+<a class="text-zinc-500 hover:text-[#F63A22] transition-colors hover:underline decoration-[#F63A22] underline-offset-4" href="#">API Status</a>
+<a class="text-zinc-500 hover:text-[#F63A22] transition-colors hover:underline decoration-[#F63A22] underline-offset-4" href="#">Geist Mono Reference</a>
+<a class="text-white hover:underline decoration-[#F63A22] underline-offset-4" href="#">Support Console</a>
+</div>
+</div>
+</footer>
+</body></html>

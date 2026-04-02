@@ -1,0 +1,12 @@
+{
+  "env": {
+    "API_TIMEOUT_MS": "300000"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(npm install*)",
+      "Bash(pnpm install*)"
+    ]
+  }
+}

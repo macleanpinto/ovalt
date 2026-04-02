@@ -1,0 +1,39 @@
+{
+  "cleanupPeriodDays": 30,
+  "includeCoAuthoredBy": false,
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/update-claude-memory.py"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Glob(**)",
+      "Grep(**)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(npm test*)",
+      "Bash(npm run*)",
+      "Bash(pnpm test*)",
+      "Bash(pnpm run*)",
+      "Bash(pytest*)",
+      "Bash(ls*)",
+      "Bash(pwd)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(sudo*)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}

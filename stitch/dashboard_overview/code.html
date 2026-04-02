@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>GTM Migration - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=Space+Grotesk:wght@400;500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              colors: {
+                "tertiary": "#c6c6c7",
+                "outline": "#ad8881",
+                "tertiary-fixed-dim": "#c6c6c7",
+                "primary-fixed-dim": "#ffb4a7",
+                "tertiary-fixed": "#e2e2e2",
+                "secondary-fixed-dim": "#5fde8f",
+                "on-secondary-container": "#003117",
+                "primary-fixed": "#ffdad4",
+                "on-secondary-fixed": "#00210e",
+                "secondary": "#5fde8f",
+                "on-tertiary-fixed": "#1a1c1c",
+                "outline-variant": "#5d3f3a",
+                "on-error": "#690005",
+                "background": "#131313",
+                "secondary-fixed": "#7dfba9",
+                "surface-bright": "#393939",
+                "error": "#ffb4ab",
+                "on-primary-fixed-variant": "#910b00",
+                "surface-dim": "#131313",
+                "error-container": "#93000a",
+                "on-error-container": "#ffdad6",
+                "on-surface-variant": "#e6bdb6",
+                "on-primary": "#670500",
+                "on-tertiary-container": "#282a2a",
+                "on-secondary": "#00391c",
+                "on-tertiary": "#2f3131",
+                "primary-container": "#ff553c",
+                "secondary-container": "#15a65e",
+                "primary": "#ffb4a7",
+                "on-background": "#e5e2e1",
+                "surface-container": "#20201f",
+                "on-surface": "#e5e2e1",
+                "inverse-surface": "#e5e2e1",
+                "surface-container-lowest": "#0e0e0e",
+                "surface": "#131313",
+                "tertiary-container": "#909191",
+                "surface-container-low": "#1c1b1b",
+                "surface-container-high": "#2a2a2a",
+                "inverse-on-surface": "#313030",
+                "surface-tint": "#ffb4a7",
+                "on-tertiary-fixed-variant": "#454747",
+                "on-secondary-fixed-variant": "#00522b",
+                "surface-container-highest": "#353535",
+                "on-primary-fixed": "#400200",
+                "surface-variant": "#353535",
+                "inverse-primary": "#bd1100",
+                "on-primary-container": "#5a0400"
+              },
+              fontFamily: {
+                "headline": ["Inter"],
+                "body": ["Inter"],
+                "label": ["Space Grotesk"]
+              },
+              borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+            },
+          },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            background-color: #131313;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: #131313; }
+        ::-webkit-scrollbar-thumb { background: #353535; border-radius: 2px; }
+    </style>
+</head>
+<body class="font-body text-on-surface antialiased overflow-x-hidden">
+<!-- TopNavBar -->
+<header class="fixed top-0 w-full z-50 bg-[#131313]/80 backdrop-blur-xl border-b border-white/5 shadow-[0_8px_32px_rgba(0,0,0,0.5)] font-['Inter'] antialiased tracking-tight">
+<div class="flex items-center justify-between px-8 h-16 w-full">
+<div class="flex items-center gap-12">
+<span class="text-xl font-bold tracking-tighter text-[#F63A22] uppercase">GTM Migration</span>
+<nav class="hidden md:flex items-center gap-8">
+<a class="text-white font-semibold border-b-2 border-[#F63A22] pb-1 transition-all duration-200" href="#">Dashboard</a>
+<a class="text-zinc-500 hover:text-zinc-300 transition-colors" href="#">Containers</a>
+<a class="text-zinc-500 hover:text-zinc-300 transition-colors" href="#">Monitoring</a>
+<a class="text-zinc-500 hover:text-zinc-300 transition-colors" href="#">Settings</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 text-zinc-500 hover:bg-white/5 transition-all duration-200 active:scale-95">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 text-zinc-500 hover:bg-white/5 transition-all duration-200 active:scale-95">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+</button>
+<div class="h-8 w-8 rounded-full overflow-hidden border border-white/10 ml-2">
+<img alt="User profile" class="h-full w-full object-cover" data-alt="Close-up professional portrait of a tech professional in soft studio lighting with a neutral background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAPZ6ofViXgGGpQEvJ_VG-l-Z1sp0sbi1oh9hCC3lOZqQb0jIXTw0BNNk-XUCYKaooNwibJRrLoIWPtvM392F_OiQKWtn6j4hG7VEbTwaw3LKmnMAHX9dr3CUAot_Lxu5PIQoMzjHtOQeyQCbuyg_l6Z7aa-3_ffqrBbs6yjj12FbmLKZCY11-MGm1w0MqHMX7IP_MMRUwNfdOjr5MceJaFIu9b53bI8ta4WHEScXB9Vj6sBzMG5KjPeYw6EClxySwX7k_ryX6dyQ"/>
+</div>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<aside class="h-screen w-64 fixed left-0 top-0 border-r border-white/5 bg-[#0e0e0e] font-['Inter'] text-sm hidden md:flex flex-col py-6 pt-24">
+<div class="px-6 mb-8">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-[#F63A22] flex items-center justify-center text-white font-bold">A</div>
+<div>
+<h3 class="font-semibold text-white leading-none">Atelier Admin</h3>
+<p class="text-[10px] text-zinc-500 uppercase tracking-widest mt-1">Server-Side GTM</p>
+</div>
+</div>
+</div>
+<nav class="flex-grow">
+<div class="space-y-1">
+<a class="flex items-center gap-3 px-6 py-3 bg-white/5 text-white border-r-2 border-[#F63A22] transition-all duration-300 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[#F63A22]" data-icon="dashboard">dashboard</span>
+<span>Overview</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-zinc-500 hover:bg-white/5 hover:text-white transition-all duration-300 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="storage">storage</span>
+<span>Infrastructure</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-zinc-500 hover:bg-white/5 hover:text-white transition-all duration-300 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="shield">shield</span>
+<span>Security</span>
+</a>
+<a class="flex items-center gap-3 px-6 py-3 text-zinc-500 hover:bg-white/5 hover:text-white transition-all duration-300 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+<span>Audit Logs</span>
+</a>
+</div>
+</nav>
+<div class="px-4 mb-6">
+<button class="w-full py-2.5 bg-primary-container text-on-primary-fixed font-semibold rounded-xl text-xs active:scale-95 transition-transform">
+                Deploy Container
+            </button>
+</div>
+<div class="px-6 space-y-3 pt-6 border-t border-white/5">
+<a class="flex items-center gap-3 text-zinc-500 hover:text-white transition-colors" href="#">
+<span class="material-symbols-outlined text-sm" data-icon="description">description</span>
+<span>Docs</span>
+</a>
+<a class="flex items-center gap-3 text-zinc-500 hover:text-white transition-colors" href="#">
+<span class="material-symbols-outlined text-sm" data-icon="contact_support">contact_support</span>
+<span>Support</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="md:ml-64 pt-24 px-8 pb-12 min-h-screen">
+<!-- Header Section -->
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+<div>
+<h1 class="text-4xl font-extrabold tracking-tight text-white mb-2">Dashboard</h1>
+<p class="text-zinc-500 font-medium">Real-time oversight of your server-side infrastructure.</p>
+</div>
+<button class="px-6 py-3 bg-[#F63A22] text-white font-bold rounded-xl flex items-center gap-2 hover:brightness-110 active:scale-95 transition-all shadow-[0_0_20px_rgba(246,58,34,0.3)]">
+<span class="material-symbols-outlined text-lg" data-icon="add_circle">add_circle</span>
+                Connect New Container
+            </button>
+</div>
+<!-- Stats Row -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+<div class="bg-surface-container rounded-lg p-6 border-l border-white/5">
+<p class="text-[10px] font-label text-zinc-500 uppercase tracking-widest mb-1">Total Containers</p>
+<div class="flex items-baseline gap-2">
+<span class="text-3xl font-bold text-white">42</span>
+<span class="text-secondary text-xs font-semibold">+4 this month</span>
+</div>
+</div>
+<div class="bg-surface-container rounded-lg p-6 border-l border-white/5">
+<p class="text-[10px] font-label text-zinc-500 uppercase tracking-widest mb-1">Total Migrated</p>
+<div class="flex items-baseline gap-2">
+<span class="text-3xl font-bold text-white">38</span>
+<span class="text-zinc-500 text-xs font-semibold">90.4%</span>
+</div>
+</div>
+<div class="bg-surface-container rounded-lg p-6 border-l border-white/5">
+<p class="text-[10px] font-label text-zinc-500 uppercase tracking-widest mb-1">Avg. Performance Gain</p>
+<div class="flex items-baseline gap-2">
+<span class="text-3xl font-bold text-[#F63A22]">+24%</span>
+<span class="text-secondary text-xs font-semibold">optimized</span>
+</div>
+</div>
+<div class="bg-surface-container rounded-lg p-6 border-l border-white/5">
+<p class="text-[10px] font-label text-zinc-500 uppercase tracking-widest mb-1">Monthly Events</p>
+<div class="flex items-baseline gap-2">
+<span class="text-3xl font-bold text-white">12.4M</span>
+<span class="text-zinc-500 text-xs font-semibold">tracked</span>
+</div>
+</div>
+</div>
+<!-- Main Bento Grid -->
+<div class="grid grid-cols-12 gap-8">
+<!-- Recent Containers Table -->
+<div class="col-span-12 lg:col-span-8 bg-surface-container rounded-lg overflow-hidden border border-white/5">
+<div class="p-6 border-b border-white/5 flex justify-between items-center">
+<h3 class="font-bold text-lg text-white">Recent Containers</h3>
+<button class="text-zinc-500 hover:text-white text-xs font-label">VIEW ALL</button>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low text-zinc-500 text-[10px] uppercase font-label tracking-widest">
+<th class="px-6 py-4">Container Name</th>
+<th class="px-6 py-4">Status</th>
+<th class="px-6 py-4">Account ID</th>
+<th class="px-6 py-4">Last Activity</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-white/5">
+<tr class="hover:bg-white/5 transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="text-white font-medium">Production-Main-US</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-1 rounded bg-secondary-container/20 text-secondary text-[10px] font-bold uppercase tracking-tight">Migrated</span>
+</td>
+<td class="px-6 py-4 font-mono text-xs text-zinc-400">GTM-K92BX7L</td>
+<td class="px-6 py-4 text-xs text-zinc-500">2m ago</td>
+</tr>
+<tr class="hover:bg-white/5 transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+<span class="text-white font-medium">Marketing-Landing-EU</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-1 rounded bg-primary-container/20 text-primary text-[10px] font-bold uppercase tracking-tight">In Progress</span>
+</td>
+<td class="px-6 py-4 font-mono text-xs text-zinc-400">GTM-P82X9M1</td>
+<td class="px-6 py-4 text-xs text-zinc-500">14m ago</td>
+</tr>
+<tr class="hover:bg-white/5 transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-error"></div>
+<span class="text-white font-medium">Staging-Sand-Box</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-1 rounded bg-error-container/20 text-error text-[10px] font-bold uppercase tracking-tight">Issues</span>
+</td>
+<td class="px-6 py-4 font-mono text-xs text-zinc-400">GTM-A03J1N4</td>
+<td class="px-6 py-4 text-xs text-zinc-500">1h ago</td>
+</tr>
+<tr class="hover:bg-white/5 transition-colors group">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="text-white font-medium">Ecommerce-Store-Global</span>
+</div>
+</td>
+<td class="px-6 py-4">
+<span class="px-2 py-1 rounded bg-secondary-container/20 text-secondary text-[10px] font-bold uppercase tracking-tight">Migrated</span>
+</td>
+<td class="px-6 py-4 font-mono text-xs text-zinc-400">GTM-W22L0P9</td>
+<td class="px-6 py-4 text-xs text-zinc-500">4h ago</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- Side Bento Column -->
+<div class="col-span-12 lg:col-span-4 flex flex-col gap-8">
+<!-- Global Migration Progress -->
+<div class="bg-surface-container rounded-lg p-6 border border-white/5">
+<h3 class="font-bold text-lg text-white mb-6">Migration Progress</h3>
+<div class="flex items-center justify-center relative py-4">
+<svg class="w-32 h-32 transform -rotate-90">
+<circle class="text-surface-container-highest" cx="64" cy="64" fill="transparent" r="54" stroke="currentColor" stroke-width="8"></circle>
+<circle class="text-secondary" cx="64" cy="64" fill="transparent" r="54" stroke="currentColor" stroke-dasharray="339.292" stroke-dashoffset="33.92" stroke-width="8"></circle>
+<circle class="text-primary" cx="64" cy="64" fill="transparent" r="54" stroke="currentColor" stroke-dasharray="339.292" stroke-dashoffset="305" stroke-width="8"></circle>
+</svg>
+<div class="absolute inset-0 flex flex-col items-center justify-center">
+<span class="text-2xl font-bold text-white">91%</span>
+</div>
+</div>
+<div class="mt-6 space-y-3">
+<div class="flex items-center justify-between text-xs">
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="text-zinc-400">Migrated</span>
+</div>
+<span class="text-white font-bold">38</span>
+</div>
+<div class="flex items-center justify-between text-xs">
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+<span class="text-zinc-400">In Progress</span>
+</div>
+<span class="text-white font-bold">3</span>
+</div>
+<div class="flex items-center justify-between text-xs">
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 rounded-full bg-error"></div>
+<span class="text-zinc-400">Issues</span>
+</div>
+<span class="text-white font-bold">1</span>
+</div>
+</div>
+</div>
+<!-- System Health Card -->
+<div class="bg-surface-container rounded-lg p-6 border border-white/5 relative overflow-hidden group">
+<div class="absolute top-0 right-0 p-4 opacity-10">
+<span class="material-symbols-outlined text-6xl" data-icon="monitor_heart">monitor_heart</span>
+</div>
+<h3 class="font-bold text-lg text-white mb-4">System Health</h3>
+<div class="space-y-6 relative z-10">
+<div>
+<div class="flex justify-between items-center mb-2">
+<span class="text-xs font-label text-zinc-500 uppercase">Uptime</span>
+<span class="text-xs font-bold text-secondary">99.98%</span>
+</div>
+<div class="w-full h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-secondary w-[99.98%]"></div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-4">
+<div>
+<p class="text-[10px] font-label text-zinc-500 uppercase mb-1">CPU Load</p>
+<p class="text-lg font-bold text-white">24.2%</p>
+</div>
+<div>
+<p class="text-[10px] font-label text-zinc-500 uppercase mb-1">Memory Usage</p>
+<p class="text-lg font-bold text-white">4.8 GB</p>
+</div>
+</div>
+<div class="pt-2">
+<div class="bg-surface-container-low p-3 rounded flex items-center gap-3">
+<span class="material-symbols-outlined text-secondary text-sm" data-icon="check_circle">check_circle</span>
+<span class="text-[11px] text-zinc-400">All 12 server clusters are currently healthy and responding within &lt;15ms.</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Asymmetric Detail Section: Infrastructure Highlight -->
+<div class="mt-12 grid grid-cols-1 md:grid-cols-2 gap-8 items-center bg-surface-container-low rounded-xl p-8 border border-white/5">
+<div class="order-2 md:order-1">
+<h3 class="text-2xl font-bold text-white mb-4 leading-tight">Automated Verification<br/>of Server-Side Hits.</h3>
+<p class="text-zinc-400 mb-6 text-sm leading-relaxed">
+                    Our Atelier-grade tracking verification system automatically reconciles client-side attempts with server-side success logs. Achieve 100% data parity with zero manual auditing.
+                </p>
+<div class="flex gap-4">
+<div class="flex flex-col">
+<span class="text-2xl font-bold text-[#F63A22]">0.02%</span>
+<span class="text-[10px] font-label text-zinc-500 uppercase">Discrepancy Rate</span>
+</div>
+<div class="w-px h-10 bg-white/5 mx-2"></div>
+<div class="flex flex-col">
+<span class="text-2xl font-bold text-white">Real-time</span>
+<span class="text-[10px] font-label text-zinc-500 uppercase">Processing</span>
+</div>
+</div>
+</div>
+<div class="order-1 md:order-2 bg-surface-container-highest rounded-lg p-4 h-64 relative overflow-hidden border border-white/10 shadow-2xl">
+<!-- Mock Code/Log Visualization -->
+<div class="font-mono text-[10px] space-y-1 text-zinc-400 opacity-60">
+<p class="text-secondary-fixed-dim">[2023-11-24 14:02:11] POST /g/collect?v=2&amp;tid=G-XXXXX</p>
+<p>&gt; payload_size: 1.4kb</p>
+<p>&gt; transport: beacon</p>
+<p>&gt; status: 200 OK (Processed by GTM-Server-01)</p>
+<p class="text-primary">[2023-11-24 14:02:12] Transformation Active: clean_pii_data</p>
+<p class="text-secondary-fixed-dim">[2023-11-24 14:02:12] Upstream: GA4_Primary_Stream -&gt; Success</p>
+<p class="text-secondary-fixed-dim">[2023-11-24 14:02:12] Upstream: Meta_CAPI -&gt; Success</p>
+<p class="text-zinc-500">// Waiting for next event cluster...</p>
+</div>
+<div class="absolute bottom-4 right-4 h-24 w-48 bg-gradient-to-br from-[#F63A22]/20 to-transparent blur-2xl rounded-full"></div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar for Mobile -->
+<footer class="md:hidden fixed bottom-0 w-full bg-[#131313]/90 backdrop-blur-xl border-t border-white/5 z-50">
+<div class="flex justify-around items-center h-16">
+<a class="flex flex-col items-center gap-1 text-[#F63A22]" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="text-[10px] font-medium">Overview</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-zinc-500" href="#">
+<span class="material-symbols-outlined" data-icon="storage">storage</span>
+<span class="text-[10px] font-medium">Infra</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-zinc-500" href="#">
+<span class="material-symbols-outlined" data-icon="shield">shield</span>
+<span class="text-[10px] font-medium">Security</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-zinc-500" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="text-[10px] font-medium">Settings</span>
+</a>
+</div>
+</footer>
+</body></html>

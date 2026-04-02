@@ -1,0 +1,10 @@
+{
+  "hosted-zone:account=549116506406:domainName=ovalt.org:region=us-east-1": {
+    "Id": "/hostedzone/Z04515781EQOILG6KI8QM",
+    "Name": "ovalt.org."
+  },
+  "hosted-zone:account=549116506406:domainName=ovalt.org:region=eu-north-1": {
+    "Id": "/hostedzone/Z04515781EQOILG6KI8QM",
+    "Name": "ovalt.org."
+  }
+}
