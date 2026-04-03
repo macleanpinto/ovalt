@@ -1,11 +1,14 @@
 import type { SQSEvent, SQSRecord, Context } from "aws-lambda";
-import { processMessage } from "./index.js";
+import type { QueueMessage } from "./migration/types.js";
+import { ensureArtifactsBucket, processRun } from "./processor.js";
 
 /**
  * Lambda handler for processing SQS messages (migration worker).
  *
  * Triggered by SQS queue: tag-relay-migrations
  * Processes migration jobs from the queue.
+ *
+ * NOTE: Does NOT import from index.ts to avoid dotenv dependency (Lambda doesn't need it).
  */
 export async function handler(event: SQSEvent, context: Context): Promise<void> {
   console.log(`Processing ${event.Records.length} SQS message(s)`, {
@@ -13,10 +16,13 @@ export async function handler(event: SQSEvent, context: Context): Promise<void> 
     functionName: context.functionName
   });
 
+  // Ensure S3 bucket exists
+  await ensureArtifactsBucket();
+
   // Process messages sequentially (batch size = 1 recommended for migrations)
   for (const record of event.Records) {
     try {
-      const message = JSON.parse(record.body);
+      const message = JSON.parse(record.body) as QueueMessage;
 
       console.log(`Processing message`, {
         messageId: record.messageId,
@@ -24,7 +30,7 @@ export async function handler(event: SQSEvent, context: Context): Promise<void> 
         importId: message.importId
       });
 
-      await processMessage(message);
+      await processRun(message);
 
       console.log(`Message processed successfully`, {
         messageId: record.messageId,

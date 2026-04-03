@@ -1,11 +1,6 @@
-import { config as loadDotenv } from "dotenv";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-// Load repo-root .env
-const __repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../");
-loadDotenv({ path: resolve(__repoRoot, ".env") });
-loadDotenv({ path: resolve(__repoRoot, ".env.local"), override: true });
+// NOTE: dotenv is NOT loaded here to avoid runtime dependency in Lambda.
+// Lambda gets env vars from CDK/CloudFormation directly.
+// For local development, use index.ts which loads dotenv.
 
 import { CreateBucketCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
