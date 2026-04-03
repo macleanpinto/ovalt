@@ -7,7 +7,7 @@ Purpose: Perform high-signal code reviews focused on correctness, regressions, m
 - Reviewing feature branches before merge.
 - Reviewing large refactors for hidden regressions.
 - Checking whether tests are sufficient for changed behavior.
-- Verifying that changes align with `PRD-2026-03-26.md` goals.
+- Verifying that changes align with product goals in `docs/system-design.md` and `README.md`.
 
 ## Inputs
 

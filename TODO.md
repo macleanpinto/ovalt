@@ -1,69 +1,17 @@
-# Tag Relay - TODO
+# TODO / pending
 
-## 🚀 Deploy to AWS
+## Operations
 
-```bash
-# 1. Setup secrets
-./scripts/setup-secrets.sh production
+- [ ] CloudWatch alarms (errors, latency) and billing alerts
+- [ ] Tighten API CORS to known web origins (if still `*`)
+- [ ] DynamoDB backups / restore drill (optional)
 
-# 2. Build applications
-cd apps/api && npm ci && npm run build && cd ../..
-cd apps/worker && npm ci && npm run build && cd ../..
-cd apps/web-nextjs && npm ci && npm run build:lambda && cd ../..
+## Product / engineering
 
-# 3. Deploy with CDK
-cd infra/cdk
-npm ci && npm run build
-ENVIRONMENT=production npm run deploy
+- [ ] OpenAPI spec for public API
+- [ ] Broader tag-vendor rules (e.g. Adobe, Segment) as needed
+- [ ] User-facing migration checklist doc (short)
 
-# 4. Get URLs from outputs
-aws cloudformation describe-stacks \
-  --stack-name tag-relay-api-production \
-  --query 'Stacks[0].Outputs'
+## CI / GitHub
 
-# 5. Test deployment
-curl https://YOUR-API-URL/health
-```
-
-**Time:** 15 minutes
-
----
-
-## 🔐 Production Hardening
-
-### Security
-- [ ] Review IAM policies
-- [ ] Configure CORS allowlist (remove `*`)
-- [ ] Add API Gateway rate limiting
-
-### Monitoring
-- [ ] CloudWatch alarms (errors, latency)
-- [ ] Billing alerts
-- [ ] Error notifications (SNS)
-
-### Backup
-- [ ] Enable DynamoDB backups
-- [ ] Test restore procedure
-
----
-
-## 📚 Documentation
-
-- [ ] OpenAPI/Swagger spec
-- [ ] User migration guide
-- [ ] OAuth setup guide
-- [ ] Troubleshooting guide
-
----
-
-## 🚀 Future Features
-
-- [ ] Expand rule coverage (Adobe, Segment)
-- [ ] Custom rule UI
-- [ ] CloudFront CDN
-- [ ] Custom domains
-- [ ] Multi-region
-
----
-
-See [PROJECT-STATUS.md](PROJECT-STATUS.md) for complete status.
+- [ ] Confirm OIDC role + `PRODUCTION_API_URL` in repo settings

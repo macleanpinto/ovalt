@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <rect width="32" height="32" rx="8" fill="#131313"/>
-  <!-- Tag outline -->
+  <!-- Tag Relay style: client tag, flow arrow, server node -->
+  <rect width="32" height="32" rx="8" fill="#141414"/>
   <path
     d="M14.5 7.5 7.5 14.5v6l4 4h6l7-7v-6L22 7.5h-7.5z"
     stroke="#ff553c"
@@ -9,7 +9,6 @@
     fill="none"
   />
   <circle cx="17" cy="14" r="1.5" fill="#ff553c"/>
-  <!-- Arrow to server node -->
   <path
     d="M22 16h5M25 13l3 3-3 3"
     stroke="#ff553c"

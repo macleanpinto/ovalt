@@ -44,20 +44,7 @@ export function registerOAuthRoutes(
         reply.header("Pragma", "no-cache");
         reply.header("Expires", "0");
 
-        const { url, state } = oauthService.generateAuthUrl(provider);
-
-        // Secure in production and on Lambda (HTTPS); omit Secure on local HTTP
-        const secureCookie =
-          process.env.NODE_ENV === "production" || Boolean(process.env.AWS_EXECUTION_ENV);
-
-        // Store state in cookie for additional security
-        reply.setCookie("oauth_state", state, {
-          httpOnly: true,
-          secure: secureCookie,
-          sameSite: "lax",
-          path: "/",
-          maxAge: 10 * 60 // 10 minutes
-        });
+        const { url } = await oauthService.generateAuthUrl(provider);
 
         // Browser top-level navigation (from web app on another origin) — avoids cross-site fetch
         // blocking Set-Cookie for api.* before redirect to Google.
@@ -102,16 +89,7 @@ export function registerOAuthRoutes(
       });
     }
 
-    // Verify state
-    const storedState = req.cookies.oauth_state;
-    if (!storedState || storedState !== state) {
-      return reply.code(400).send({
-        error: "Bad Request",
-        message: "Invalid state parameter"
-      });
-    }
-
-    const verifiedProvider = oauthService.verifyState(state);
+    const verifiedProvider = await oauthService.verifyState(state);
     if (!verifiedProvider || verifiedProvider !== provider) {
       return reply.code(400).send({
         error: "Bad Request",
@@ -251,7 +229,7 @@ export function registerOAuthRoutes(
     const { provider } = parsed.data;
 
     try {
-      const { url } = oauthService.generateAuthUrl(provider);
+      const { url } = await oauthService.generateAuthUrl(provider);
       return { url };
     } catch (err) {
       return reply.code(500).send({

@@ -6,7 +6,7 @@ Phase 1-4 scaffold implemented; integration hardening next.
 
 ## What Exists
 
-- `PRD-2026-03-26.md` with JTBD, user profile, and must-have requirements.
+- Product scope covered in `README.md` and `docs/system-design.md`.
 - Mock design artifacts in `stitch/`.
 - Finalized architecture in `docs/system-design.md`:
   - React + Fastify + DynamoDB + SQS + S3

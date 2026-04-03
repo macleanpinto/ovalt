@@ -10,9 +10,9 @@ Project memory and operating guide for AI coding sessions in this repository.
 
 ## Source Context
 
-- Product requirements are in `docs/PRD-2026-03-26.md`.
-- Architecture documentation is in `docs/system-design.md`.
-- Deployment guide is in `DEPLOYMENT.md`.
+- Architecture: `docs/system-design.md`
+- Setup, deploy, local dev: `README.md`
+- Pending work: `TODO.md`
 
 ## Primary User
 
@@ -157,55 +157,8 @@ if (tagName.includes('GA4') || tagName.includes('google analytics')) {
   - **Privacy**: https://ovalt.org/privacy
   - **Terms**: https://ovalt.org/terms
 
-## Production Configuration
+## Production configuration
 
-### OAuth Setup
-- **Google OAuth Client ID**: `544490190265-jrbhu2jedno8lsn2m02ihu5s4c5hgocc`
-- **Redirect URIs configured**:
-  - Production user login: `https://api.ovalt.org/auth/oauth/google/callback`
-  - Production GTM access: `https://api.ovalt.org/gtm/oauth/callback`
-  - Local development: `http://localhost:3001/auth/oauth/google/callback`
-  - Local GTM: `http://localhost:3001/gtm/oauth/callback`
+Deploy, OAuth redirect URIs, and regions: **`README.md`**. Architecture: **`docs/system-design.md`**.
 
-### Infrastructure
-- **Primary Region**: eu-north-1 (Database, API, Web Lambda)
-- **CloudFront Region**: us-east-1 (Domain/CDN)
-- **S3 Buckets**: Artifacts, Web static assets (public read enabled)
-- **Lambda Functions**: API, Web SSR, Worker
-- **DynamoDB**: 8 tables with multi-tenancy support
-
-## Important Notes
-
-### Lambda Caching Behavior
-Lambda functions cache the Fastify app instance on first invocation for performance. This means:
-- Environment variable changes require Lambda container refresh
-- Use `aws lambda update-function-configuration --description "$(date +%s)"` to force restart
-- Normal CDK deployments automatically refresh containers with new code
-
-### OAuth Flow
-- OAuth URLs include cache-control headers to prevent browser caching
-- AuthContext skips auth check on `/auth/callback` page to prevent race condition
-- Token storage happens before any auth validation to avoid redirect loops
-
-### Deployment Process
-```bash
-# Standard deployment (updates code + env vars together)
-npm run deploy:production
-
-# Manual Lambda update (when env vars change without code deploy)
-cd apps/api && npm run build:lambda
-cd ../../apps/api/dist && zip -r /tmp/api.zip .
-aws lambda update-function-code --function-name tag-relay-api-production --zip-file fileb:///tmp/api.zip --publish
-
-# Force Lambda container refresh (clears cache)
-aws lambda put-function-concurrency --function-name tag-relay-api-production --reserved-concurrent-executions 0
-sleep 5
-aws lambda delete-function-concurrency --function-name tag-relay-api-production
-```
-
-### CloudFormation Stacks
-All stacks in healthy state:
-- `tag-relay-database-production` (eu-north-1)
-- `tag-relay-api-production` (eu-north-1)
-- `tag-relay-web-production` (eu-north-1)
-- `tag-relay-domain-production` (us-east-1)
+**Runtime notes:** Lambda may reuse the Fastify instance; env changes need a new deploy or function update. Web OAuth flow uses cache-control on auth URLs; `/auth/callback` skips the initial auth check to avoid races.

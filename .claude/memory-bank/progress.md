@@ -188,7 +188,7 @@
   - Lambda bundling with esbuild
   - CDK app structure with proper TypeScript configuration
   - GitHub Actions workflow for CDK deployment
-  - Updated DEPLOYMENT.md and README.md with CDK instructions
+  - Updated README.md with CDK instructions
   - Created infra/cdk/README.md with complete guide
   - Marked old shell scripts as legacy (kept for reference)
   - Total: ~600 lines of CDK infrastructure code
@@ -204,20 +204,12 @@
   - Deleted 19 redundant documentation files:
     - NEXTJS-SSR-COMPLETE.md, README-INFRASTRUCTURE.md
     - All intermediate implementation guides (oauth, auth, container provisioning, ruleset)
-    - Old deployment guides (replaced by DEPLOYMENT.md)
+    - Old deployment guides (consolidated into README.md)
     - Duplicate infrastructure docs
   - Deleted obsolete code directories:
     - app/ (old Vite SPA at root level)
     - apps/web/ (old Vite web app, replaced by apps/web-nextjs/)
-  - Final documentation structure (5 files):
-    - README.md (project overview, features, quick start)
-    - DEPLOYMENT.md (complete deployment guide)
-    - docs/system-design.md (technical architecture)
-    - CLAUDE.md (AI project instructions)
-    - PRD-2026-03-26.md (original requirements)
-  - Kept app-specific docs:
-    - apps/web-nextjs/README.md
-    - apps/worker/src/migration/engine/README.md
+  - Docs consolidated: README.md, docs/system-design.md, TODO.md; brief READMEs under infra/cdk, apps/web-nextjs, .github/workflows; CLAUDE.md for AI sessions.
 
 - **UI INTEGRATION & TESTING (2026-03-30):**
   - Created complete API client library (apps/web-nextjs/src/lib/api-client.ts - 250 lines)

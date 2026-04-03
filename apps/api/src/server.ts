@@ -216,7 +216,8 @@ if (env.GITHUB_OAUTH_CLIENT_ID && env.GITHUB_OAUTH_CLIENT_SECRET && githubOAuthR
 const oauthService = new OAuthService({
   ddb: ddbDoc,
   oauthAccountsTable: env.DDB_TABLE_OAUTH_ACCOUNTS,
-  providers: oauthProviders
+  providers: oauthProviders,
+  stateSecret: env.JWT_SECRET
 });
 
 // Register authentication routes

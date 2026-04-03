@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
+import { BrandLogo } from "@/components/BrandLogo";
 import { useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 
@@ -38,8 +38,8 @@ export default function Register() {
     <div className="min-h-screen bg-[#131313] flex items-center justify-center p-8">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <Link href="/" className="inline-block mb-4">
-            <Image src="/logo.svg" alt="Ovalt" width={160} height={32} unoptimized className="h-8 w-auto" />
+          <Link href="/" className="inline-flex mb-4 justify-center">
+            <BrandLogo />
           </Link>
           <h1 className="text-3xl font-bold mb-2 text-white headline-font">Create Account</h1>
           <p className="text-[#e6bdb6]">

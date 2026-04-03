@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { SignJWT, jwtVerify } from "jose";
 import type {
   OAuthProvider,
   OAuthProviderConfig,
@@ -16,32 +16,23 @@ export type OAuthServiceConfig = {
   ddb: DynamoDBDocumentClient;
   oauthAccountsTable: string;
   providers: OAuthProviderConfig;
+  /** HMAC key for signing OAuth `state` (must match across Lambda instances; use JWT_SECRET). */
+  stateSecret: string;
 };
 
 export class OAuthService {
-  // In-memory state store (in production, use Redis or DynamoDB)
-  private stateStore = new Map<string, { provider: OAuthProvider; expiresAt: number }>();
-
-  constructor(private config: OAuthServiceConfig) {
-    // Clean up expired states every 10 minutes
-    setInterval(() => this.cleanupExpiredStates(), 10 * 60 * 1000);
-  }
+  constructor(private config: OAuthServiceConfig) {}
 
   /**
    * Generate OAuth authorization URL.
    */
-  generateAuthUrl(provider: OAuthProvider): { url: string; state: string } {
+  async generateAuthUrl(provider: OAuthProvider): Promise<{ url: string; state: string }> {
     const providerConfig = this.getProviderConfig(provider);
     if (!providerConfig) {
       throw new Error(`OAuth provider ${provider} is not configured`);
     }
 
-    // Generate secure state token
-    const state = randomBytes(32).toString("base64url");
-    this.stateStore.set(state, {
-      provider,
-      expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
-    });
+    const state = await this.signOAuthState(provider);
 
     const params = new URLSearchParams({
       client_id: providerConfig.clientId,
@@ -69,21 +60,32 @@ export class OAuthService {
   }
 
   /**
-   * Verify OAuth state token.
+   * Verify OAuth state token (signed JWT — works across Lambda cold starts / instances).
    */
-  verifyState(state: string): OAuthProvider | null {
-    const stored = this.stateStore.get(state);
-    if (!stored) {
+  async verifyState(state: string): Promise<OAuthProvider | null> {
+    try {
+      const secret = new TextEncoder().encode(this.config.stateSecret);
+      const { payload } = await jwtVerify(state, secret, { algorithms: ["HS256"] });
+      if (payload.purpose !== "oauth") {
+        return null;
+      }
+      const p = payload.provider;
+      if (p !== "google" && p !== "github") {
+        return null;
+      }
+      return p;
+    } catch {
       return null;
     }
+  }
 
-    if (stored.expiresAt < Date.now()) {
-      this.stateStore.delete(state);
-      return null;
-    }
-
-    this.stateStore.delete(state);
-    return stored.provider;
+  private async signOAuthState(provider: OAuthProvider): Promise<string> {
+    const secret = new TextEncoder().encode(this.config.stateSecret);
+    return new SignJWT({ purpose: "oauth", provider })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("10m")
+      .sign(secret);
   }
 
   /**
@@ -348,17 +350,5 @@ export class OAuthService {
    */
   private getProviderConfig(provider: OAuthProvider) {
     return this.config.providers[provider];
-  }
-
-  /**
-   * Clean up expired state tokens.
-   */
-  private cleanupExpiredStates() {
-    const now = Date.now();
-    for (const [state, data] of this.stateStore.entries()) {
-      if (data.expiresAt < now) {
-        this.stateStore.delete(state);
-      }
-    }
   }
 }

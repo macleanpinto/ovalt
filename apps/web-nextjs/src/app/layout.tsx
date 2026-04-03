@@ -10,6 +10,9 @@ export const metadata: Metadata = {
   title: "Ovalt - Server-Side Tag Migration",
   description: "Automated GTM client-side to server-side tag migration with minimal manual work",
   keywords: ["GTM", "Google Tag Manager", "server-side tagging", "migration", "analytics"],
+  icons: {
+    icon: [{ url: "/ovalt.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({

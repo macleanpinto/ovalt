@@ -1,5 +1,5 @@
 import Link from "next/link";
-import Image from "next/image";
+import { BrandLogo } from "@/components/BrandLogo";
 
 export default function Home() {
   return (
@@ -8,7 +8,7 @@ export default function Home() {
       <nav className="fixed top-0 w-full z-50 bg-[#131313]/80 backdrop-blur-xl">
         <div className="flex justify-between items-center px-8 py-4 max-w-[1440px] mx-auto">
           <Link href="/" className="flex items-center gap-2.5">
-            <Image src="/logo.svg" alt="Ovalt" width={140} height={32} unoptimized className="h-8 w-auto" priority />
+            <BrandLogo priority />
           </Link>
           <div className="hidden md:flex items-center gap-10">
             <a className="text-[#F63A22] font-semibold label-font transition-colors duration-300" href="#product">Product</a>

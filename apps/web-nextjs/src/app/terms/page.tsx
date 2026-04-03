@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import Image from "next/image";
+import { BrandLogo } from "@/components/BrandLogo";
 
 export const metadata: Metadata = {
   title: "Terms of Service | Ovalt",
@@ -14,7 +14,7 @@ export default function TermsOfService() {
       <nav className="fixed top-0 w-full z-50 bg-[#131313]/80 backdrop-blur-xl">
         <div className="flex justify-between items-center px-8 py-4 max-w-[1440px] mx-auto">
           <Link href="/" className="flex items-center gap-2.5">
-            <Image src="/logo.svg" alt="Ovalt" width={140} height={32} unoptimized className="h-8 w-auto" priority />
+            <BrandLogo priority />
           </Link>
           <div className="flex items-center gap-6">
             <Link href="/auth/login" className="text-white/70 text-sm label-font hover:text-white transition-colors duration-300">
