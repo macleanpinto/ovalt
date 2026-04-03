@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
-import { apiClient, Run } from '@/lib/api-client';
+import { apiClient, getApiBaseUrl, Run } from '@/lib/api-client';
 
 interface DetectedTag {
   id: string;
@@ -428,7 +428,14 @@ export default function MigrationWorkspace() {
 
   const completedCount = (report?.detectedTags || []).filter(tag => tag.status === 'ready').length;
   const totalCount = report?.detectedTags?.length || 0;
-  const progressPercent = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
+  /** Footer bar + confidence: resolved = deployed to server or explicitly skipped */
+  const deploymentResolvedCount = deployedTags.size + skippedTags.size;
+  const deploymentProgressPercent =
+    totalCount > 0 ? (deploymentResolvedCount / totalCount) * 100 : 0;
+  const deploymentConfidenceScore =
+    totalCount > 0
+      ? Number(((deploymentResolvedCount / totalCount) * 10).toFixed(1))
+      : 0;
 
   if (isLoading) {
     return (
@@ -1013,7 +1020,7 @@ export default function MigrationWorkspace() {
                                       throw new Error('No GTM session found');
                                     }
 
-                                    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/gtm/create-server-container`, {
+                                    const response = await fetch(`${getApiBaseUrl()}/gtm/create-server-container`, {
                                       method: 'POST',
                                       headers: {
                                         'Content-Type': 'application/json',
@@ -2489,18 +2496,19 @@ export default function MigrationWorkspace() {
                 <div className="space-y-1 flex-grow">
                   <div className="flex justify-between text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest mb-1">
                     <span>Migration Progress</span>
-                    <span>{completedCount} of {totalCount} tags</span>
+                    <span>{deploymentResolvedCount} of {totalCount} tags</span>
                   </div>
                   <div className="w-full md:w-64 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
                     <div
                       className="h-full bg-secondary shadow-[0_0_8px_rgba(95,222,143,0.5)] transition-all duration-500"
-                      style={{ width: `${progressPercent}%` }}
+                      style={{ width: `${deploymentProgressPercent}%` }}
                     ></div>
                   </div>
                 </div>
-                {report.confidenceScore && (
+                {totalCount > 0 && (
                   <div className="hidden sm:block text-[11px] font-mono text-on-surface-variant bg-surface-container px-3 py-1.5 rounded">
-                    CONFIDENCE: <span className="text-white">{report.confidenceScore.toFixed(1)}/10</span>
+                    CONFIDENCE:{' '}
+                    <span className="text-white">{deploymentConfidenceScore.toFixed(1)}/10</span>
                   </div>
                 )}
               </div>

@@ -10,3 +10,4 @@ infra/cdk/cdk.out/
 apps/web-nextjs/.next/
 apps/web-nextjs/.open-next/
 *.zip
+

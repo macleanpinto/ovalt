@@ -3,7 +3,12 @@
  * Handles authentication and API requests
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+/** Base URL without trailing slash (env often has trailing `/`, paths start with `/`). */
+export function getApiBaseUrl(): string {
+  return (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/+$/, "");
+}
+
+const API_URL = getApiBaseUrl();
 
 export class APIError extends Error {
   constructor(public status: number, message: string, public data?: any) {
@@ -105,6 +110,7 @@ class APIClient {
 
     const response = await fetch(`${API_URL}${path}`, {
       ...options,
+      cache: options.cache ?? "no-store",
       headers,
     });
 
@@ -209,9 +215,10 @@ class APIClient {
     }
 
     const response = await fetch(`${API_URL}/imports/gtm-web-container`, {
-      method: 'POST',
+      method: "POST",
       headers,
       body: formData,
+      cache: "no-store",
     });
 
     if (!response.ok) {

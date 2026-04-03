@@ -121,6 +121,13 @@ export class TagRelayDomainStack extends cdk.Stack {
       ),
     });
 
+    // Google Search Console / OAuth domain verification (TXT at zone apex)
+    new route53.TxtRecord(this, 'GoogleSiteVerificationTxt', {
+      zone: hostedZone,
+      values: ['google-site-verification=vYvIl2QEGCobh1qK0jIK6bdBm2B06b3nomFbEEWHDhA'],
+      ttl: cdk.Duration.minutes(5),
+    });
+
     // ============================================
     // Outputs
     // ============================================

@@ -1,5 +1,5 @@
 import { dirname, resolve } from "node:path";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import cookie from "@fastify/cookie";
@@ -291,6 +291,17 @@ function getOAuthClientForSession(sessionId: string) {
 function requestPath(url: string) {
   return url.split("?")[0] ?? url;
 }
+
+/** Prevent browsers/CDNs from caching API responses (stale JSON / OAuth issues). Applied in onSend so it wins over other middleware. */
+app.addHook(
+  "onSend",
+  async (_request: FastifyRequest, reply: FastifyReply, payload: unknown) => {
+    reply.header("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    reply.header("Pragma", "no-cache");
+    reply.header("Expires", "0");
+    return payload;
+  }
+);
 
 // Authentication middleware - handles Bearer tokens, API keys, and service tokens
 app.addHook("onRequest", async (req, reply) => {

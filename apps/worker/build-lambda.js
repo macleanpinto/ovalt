@@ -1,23 +1,30 @@
 import * as esbuild from 'esbuild';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** Repo root (tag-relay/) — workspace deps live in root node_modules */
+const repoRoot = path.resolve(__dirname, '../..');
+const entry = path.join(__dirname, 'src/lambda-handler.ts');
+const outfile = path.join(__dirname, 'dist/lambda-handler.js');
+
+/**
+ * CommonJS bundle — AWS Lambda loads `lambda-handler.handler` as CJS unless
+ * package.json has "type":"module" or the file is `.mjs`. ESM output caused
+ * "Cannot use import statement outside a module" at runtime.
+ */
 await esbuild.build({
-  entryPoints: ['src/lambda-handler.ts'],
+  absWorkingDir: repoRoot,
+  entryPoints: [entry],
   bundle: true,
   platform: 'node',
   target: 'node20',
-  format: 'esm',
-  outfile: 'dist/lambda-handler.js',
+  format: 'cjs',
+  outfile,
   external: [],
-  banner: {
-    js: `import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);`
-  },
   minify: true,
   sourcemap: true,
+  nodePaths: [path.join(repoRoot, 'node_modules')]
 });
 
-console.log('✅ Worker Lambda bundled successfully');
+console.log('✅ Worker Lambda bundled successfully (CJS)');
