@@ -29,6 +29,17 @@ export type CanonicalTag = {
   rawParameterKeys: string[];
 };
 
+export type CanonicalVariable = {
+  variableId: string;
+  name: string;
+  type: string;
+  parameters: Record<string, string>;
+  /** Raw parameter list for debugging */
+  rawParameterKeys: string[];
+  /** Format value settings if present */
+  formatValue?: unknown;
+};
+
 /** Rule-engine docs link, agent web search + synthesis, or ruleset-internal marker. */
 export type MappingEvidence =
   | { type: "docs"; ref: string }
@@ -49,6 +60,19 @@ export type MappingRecord = {
   confidence: number;
   provisional: boolean;
   evidence: MappingEvidence;
+  manualActions: string[];
+};
+
+export type VariableMappingRecord = {
+  clientVariableId: string;
+  clientVariableName: string;
+  clientVariableType: string;
+  category: "data-layer" | "constant" | "lookup" | "cookie" | "container" | "custom" | "client-only";
+  serverRecommendation: string;
+  canAutoMigrate: boolean;
+  serverVariableType: string | null;
+  confidence: number;
+  provisional: boolean;
   manualActions: string[];
 };
 

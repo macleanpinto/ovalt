@@ -1,4 +1,4 @@
-import type { CanonicalTag, GtmExportPayload } from "./types.js";
+import type { CanonicalTag, CanonicalVariable, GtmExportPayload } from "./types.js";
 
 function asStr(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -80,4 +80,43 @@ export function triggerSummary(
   if (tag.firingTriggerIds.length === 0) return "No trigger";
   const names = tag.firingTriggerIds.map((id) => triggerLookup.get(id) ?? id);
   return names.join(", ");
+}
+
+export function extractCanonicalVariables(payload: GtmExportPayload): CanonicalVariable[] {
+  const variables = payload.entities?.variables ?? [];
+  const out: CanonicalVariable[] = [];
+  for (const raw of variables) {
+    const variable = raw as Record<string, unknown>;
+    const variableId = asStr(variable.variableId);
+    const name = asStr(variable.name);
+    const type = asStr(variable.type);
+    const { map, keys } = extractParams(variable);
+
+    const canonical: CanonicalVariable = {
+      variableId: variableId || `unknown-var-${out.length}`,
+      name: name || "(unnamed variable)",
+      type: type || "unknown",
+      parameters: map,
+      rawParameterKeys: keys
+    };
+
+    // Preserve format value if present
+    if (variable.formatValue !== undefined) {
+      canonical.formatValue = variable.formatValue;
+    }
+
+    out.push(canonical);
+  }
+  return out;
+}
+
+export function buildVariableNameLookup(entities: GtmExportPayload["entities"]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const v of entities?.variables ?? []) {
+    const vr = v as Record<string, unknown>;
+    const id = asStr(vr.variableId);
+    const name = asStr(vr.name);
+    if (id) m.set(id, name || id);
+  }
+  return m;
 }

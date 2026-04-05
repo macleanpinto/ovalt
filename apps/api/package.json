@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "setup:ovalt-gtm": "node scripts/setup-ovalt-gtm-engagement.mjs",
+    "setup:ovalt-gtm:auth": "node scripts/setup-ovalt-gtm-engagement.mjs --authorize",
+    "setup:ovalt-gtm:auth:save": "node scripts/setup-ovalt-gtm-engagement.mjs --authorize --write-env",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "build:lambda": "node build-lambda.js",

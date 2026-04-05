@@ -2,11 +2,9 @@ import * as cdk from 'aws-cdk-lib';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
-import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
 export interface DomainStackProps extends cdk.StackProps {
@@ -69,6 +67,49 @@ export class TagRelayDomainStack extends cdk.Stack {
     // Lambda origin for SSR
     const lambdaOrigin = new origins.HttpOrigin(webHostname);
 
+    // Same-origin path proxy: https://{domain}/sst/* → https://sst.{domain}/* (Stape-style, see
+    // https://stape.io/helpdesk/documentation/how-to-use-same-origin-through-aws-cloudfront ).
+    // Required pieces: (1) strip the /sst prefix before calling the container (viewer CF function);
+    // (2) do not forward viewer Host to origin (ALL_VIEWER_EXCEPT_HOST_HEADER); (3) X-From-Cdn for Stape.
+    const sstSubdomain = `sst.${domainName}`;
+    const sstOrigin = new origins.HttpOrigin(sstSubdomain, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+      customHeaders: {
+        // Stape: origin custom header so their edge recognizes CloudFront proxy traffic
+        'X-From-Cdn': 'cft-stape',
+        'X-Forwarded-Host': domainName,
+        'X-Forwarded-Proto': 'https',
+      },
+    });
+    // SGTM sends Service-Worker-Allowed: /_/service_worker (root-relative). Under /sst/* the browser
+    // scope /sst/_/… is not under /_/… — override to “full origin” so SW + collect paths work.
+    const sstProxyResponseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'SstProxyResponseHeaders', {
+      responseHeadersPolicyName: `TagRelay-SstProxy-${environment}`,
+      comment: `Widen Service-Worker-Allowed for ${domainName}/sst → ${sstSubdomain} proxy`,
+      removeHeaders: ['Service-Worker-Allowed'],
+      customHeadersBehavior: {
+        customHeaders: [
+          { header: 'Service-Worker-Allowed', value: '/', override: true },
+        ],
+      },
+    });
+    // Stape Step 3 trims the public path at the edge; CloudFront Functions only run on viewer
+    // request/response — origin-request would need Lambda@Edge. Viewer rewrite is sufficient here.
+    const sstPathRewrite = new cloudfront.Function(this, 'SstPathRewrite', {
+      code: cloudfront.FunctionCode.fromInline(`function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+  if (uri === "/sst" || uri === "/sst/") {
+    request.uri = "/";
+  } else if (uri.indexOf("/sst/") === 0) {
+    request.uri = uri.substring(4);
+  }
+  return request;
+}`),
+      comment: `Strip /sst prefix: ${domainName}/sst/g/collect → ${sstSubdomain}/g/collect (required)`,
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+    });
+
     this.distribution = new cloudfront.Distribution(this, 'WebDistribution', {
       // Default behavior: SSR via Lambda
       defaultBehavior: {
@@ -79,6 +120,26 @@ export class TagRelayDomainStack extends cdk.Stack {
       },
       // Additional behaviors for static assets
       additionalBehaviors: {
+        // Must precede broad patterns like *.svg so /sst/... is not sent to S3
+        '/sst*': {
+          origin: sstOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          // Forward all query strings/cookies to origin (collect URLs); do not forward viewer Host
+          // (ovalt.org) — Stape’s Lambda@Edge sets Host to the container host; this policy does the same.
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          // Avoid breaking GA4/SGTM streaming collect (e.g. richsstsse) and chunked responses
+          compress: false,
+          responseHeadersPolicy: sstProxyResponseHeaders,
+          // Must strip /sst here so the origin sees /g/collect, /gtag/js, etc., not /sst/...
+          functionAssociations: [
+            {
+              function: sstPathRewrite,
+              eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+            },
+          ],
+        },
         // Next.js static files
         '_next/static/*': {
           origin: s3Origin,

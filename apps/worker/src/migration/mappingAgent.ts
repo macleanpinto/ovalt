@@ -129,7 +129,9 @@ async function synthesizeWithBedrock(opts: {
   );
 
   const blocks = res.output?.message?.content ?? [];
-  const textBlock = blocks.find((c): c is { text: string } => typeof (c as { text?: string }).text === "string");
+  const textBlock = blocks.find(
+    (c: { text?: unknown }): c is { text: string } => typeof c.text === "string"
+  );
   const raw = textBlock?.text ? extractJsonFromModelText(textBlock.text) : "";
   if (!raw) return null;
 

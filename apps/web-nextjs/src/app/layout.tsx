@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import { GtmBody, GtmHead } from "@/components/gtm";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
@@ -23,9 +24,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <GtmHead />
         <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet" />
       </head>
       <body className={`${inter.variable} ${spaceGrotesk.variable} ${inter.className}`}>
+        <GtmBody />
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

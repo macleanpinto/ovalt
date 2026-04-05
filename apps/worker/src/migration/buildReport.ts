@@ -1,4 +1,4 @@
-import type { CanonicalTag } from "./types.js";
+import type { CanonicalTag, CanonicalVariable, VariableMappingRecord } from "./types.js";
 import type { MappingRecord } from "./types.js";
 import type { ContainerProvisioningStatus, ContainerInfo } from "../provisioning/types.js";
 import {
@@ -27,6 +27,13 @@ export type MigrationReportPayload = {
     highRisk: number;
     byCategory: Record<string, number>;
   };
+  variableSummary?: {
+    totalVariables: number;
+    autoMigratable: number;
+    manualRequired: number;
+    clientOnly: number;
+    confidenceScore: number;
+  };
   containerSummary: {
     totalTags: number;
     totalTriggers: number;
@@ -52,6 +59,16 @@ export type MigrationReportPayload = {
   };
   parityMatrix: ReturnType<typeof buildParityMatrix>;
   mappings: MappingRecord[];
+  variableMappings?: VariableMappingRecord[];
+  detectedVariables?: {
+    id: string;
+    name: string;
+    type: string;
+    category: string;
+    status: "ready" | "manual" | "client-only";
+    canAutoMigrate: boolean;
+    serverType: string | null;
+  }[];
   manualActions: { priority: "high" | "medium" | "low"; reason: string; recommendation: string }[];
   detectedTags: {
     id: string;
@@ -120,9 +137,19 @@ export function buildMigrationReport(opts: {
   rulesetVersion: string;
   tags: CanonicalTag[];
   mappings: MappingRecord[];
+  variables?: CanonicalVariable[];
+  variableMappings?: VariableMappingRecord[];
+  variableStats?: {
+    score: number;
+    provisional: boolean;
+    autoMigratable: number;
+    manualRequired: number;
+    clientOnly: number;
+  };
   confidenceScore: number;
   provisional: boolean;
   triggerLookup: Map<string, string>;
+  variableLookup?: Map<string, string>;
   containerProvisioning: {
     status: ContainerProvisioningStatus;
     containerInfo?: ContainerInfo;
@@ -195,10 +222,38 @@ export function buildMigrationReport(opts: {
       ? "Server container requires manual setup before deployment."
       : `Server container status: ${opts.containerProvisioning.status}.`;
 
+  // Build variable summary
+  const variableSummary = opts.variableStats ? {
+    totalVariables: opts.variables?.length || 0,
+    autoMigratable: opts.variableStats.autoMigratable,
+    manualRequired: opts.variableStats.manualRequired,
+    clientOnly: opts.variableStats.clientOnly,
+    confidenceScore: opts.variableStats.score
+  } : undefined;
+
+  // Build detected variables list
+  const detectedVariables = opts.variables && opts.variableMappings ? opts.variables.map((v, idx) => {
+    const m = opts.variableMappings![idx];
+    return {
+      id: v.variableId,
+      name: v.name,
+      type: v.type,
+      category: m?.category || "custom",
+      status: m?.canAutoMigrate ? "ready" as const : m?.serverVariableType ? "manual" as const : "client-only" as const,
+      canAutoMigrate: m?.canAutoMigrate || false,
+      serverType: m?.serverVariableType || null
+    };
+  }) : undefined;
+
+  const variableNote = variableSummary
+    ? `Variables: ${variableSummary.autoMigratable} auto-migratable, ${variableSummary.manualRequired} need manual config, ${variableSummary.clientOnly} client-only.`
+    : "";
+
   const executiveSummary = [
     `Tag Relay migration run ${opts.runId} for import ${opts.importId} (${opts.projectId}).`,
-    `Analyzed ${opts.tags.length} client-side tags with ruleset ${opts.rulesetVersion}.`,
+    `Analyzed ${opts.tags.length} client-side tags${variableSummary ? ` and ${variableSummary.totalVariables} variables` : ""} with ruleset ${opts.rulesetVersion}.`,
     `Weighted confidence ${opts.confidenceScore}/10${opts.provisional ? " (provisional mappings present — review before publish)" : ""}.`,
+    variableNote,
     highRiskMappings.length > 0
       ? `${highRiskMappings.length} high-risk mappings require critical review before deployment.`
       : "All mappings meet minimum quality thresholds.",
@@ -206,7 +261,7 @@ export function buildMigrationReport(opts: {
       ? `PII-related parameters detected (${complianceSummary.piiLevel} sensitivity) — ensure proper hashing and consent.`
       : "No obvious PII parameter keys detected in scanned tag fields.",
     provisioningNote
-  ].join(" ");
+  ].join(" ").trim();
 
   return {
     runId: opts.runId,
@@ -224,10 +279,11 @@ export function buildMigrationReport(opts: {
       highRisk: highRiskMappings.length,
       byCategory: categoryCounts
     },
+    variableSummary,
     containerSummary: opts.containerSummary || {
       totalTags: opts.tags.length,
       totalTriggers: 0,
-      totalVariables: 0
+      totalVariables: opts.variables?.length || 0
     },
     containerElements: opts.containerElements || {
       tags: [],
@@ -244,6 +300,8 @@ export function buildMigrationReport(opts: {
     containerProvisioning: opts.containerProvisioning,
     parityMatrix,
     mappings: opts.mappings,
+    variableMappings: opts.variableMappings,
+    detectedVariables,
     manualActions: manualFlat,
     detectedTags,
     frontendChangeSteps: buildFrontendChangeSteps(opts.containerProvisioning)

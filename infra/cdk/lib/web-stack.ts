@@ -53,6 +53,8 @@ export class TagRelayWebStack extends cdk.Stack {
       environment: {
         ENVIRONMENT: environment,
         NEXT_PUBLIC_API_URL: apiUrl,
+        /** Set at synth/deploy time, e.g. NEXT_PUBLIC_GTM_ID=GTM-XXXX cdk deploy */
+        NEXT_PUBLIC_GTM_ID: process.env.NEXT_PUBLIC_GTM_ID ?? '',
       },
     });
 

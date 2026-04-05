@@ -1,7 +1,8 @@
 import { PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { buildTriggerNameLookup, extractCanonicalTags } from "./canonical.js";
+import { buildTriggerNameLookup, buildVariableNameLookup, extractCanonicalTags, extractCanonicalVariables } from "./canonical.js";
 import { applyRuleset, aggregateConfidence, RULESET_VERSION } from "./engine/index.js";
+import { applyVariableRuleset, aggregateVariableConfidence } from "./engine/rules-variables.js";
 import { enrichMappingsWithWebAgent, parseMappingAgentEnv } from "./mappingAgent.js";
 import { buildMigrationReport } from "./buildReport.js";
 import { reportToMarkdown } from "./markdown.js";
@@ -93,10 +94,16 @@ export async function runMigrationPipeline(opts: {
     }
 
     const triggerLookup = buildTriggerNameLookup(payload.entities);
+    const variableLookup = buildVariableNameLookup(payload.entities);
     const tags = extractCanonicalTags(payload);
+    const variables = extractCanonicalVariables(payload);
 
-    // Apply production ruleset engine
+    // Apply production ruleset engine for tags
     const ruleMappings = applyRuleset(tags);
+
+    // Apply variable rules
+    const variableMappings = applyVariableRuleset(variables);
+    const variableStats = aggregateVariableConfidence(variableMappings);
 
     // Enrich low-confidence mappings with web agent (optional)
     const mappings = await enrichMappingsWithWebAgent(tags, ruleMappings, parseMappingAgentEnv(process.env));
@@ -123,9 +130,13 @@ export async function runMigrationPipeline(opts: {
       rulesetVersion: RULESET_VERSION,
       tags,
       mappings,
+      variables,
+      variableMappings,
+      variableStats,
       confidenceScore: score,
       provisional,
       triggerLookup,
+      variableLookup,
       containerProvisioning: {
         status: provisioningResult.status,
         containerInfo: provisioningResult.containerInfo,

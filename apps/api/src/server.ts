@@ -6,6 +6,17 @@ import cookie from "@fastify/cookie";
 import { ulid } from "ulid";
 import { z } from "zod";
 import { google } from "googleapis";
+import {
+  CLIENT_TO_SERVER_TAG_TYPE,
+  CLIENT_TO_SERVER_TRIGGER_TYPE,
+  getMigrationRecommendation,
+  getTriggerMigrationStrategy,
+  buildServerTriggerConfig as buildServerTriggerConfigFromMapping
+} from "./gtm-mappings/index.js";
+import {
+  buildServerVariableFromClient,
+  sortVariablesByDependency
+} from "./gtm-mappings/variable-deployment-helper.js";
 
 // Repo-root `.env` is loaded from `index.ts` (local dev only). Lambda uses env + Secrets Manager (see lambda-handler.ts).
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -107,6 +118,29 @@ export async function buildApp(): Promise<FastifyInstance> {
 // Parse env AFTER secrets are loaded from AWS Secrets Manager
 const env = envSchema.parse(process.env);
 
+// SAFETY: Force LocalStack in local/development mode
+const isLocal = process.env.ENVIRONMENT === "local" || process.env.NODE_ENV === "development";
+let awsEndpoint = env.AWS_ENDPOINT;
+
+if (isLocal && !awsEndpoint) {
+  console.warn("[api] ⚠️  LOCAL MODE: AWS_ENDPOINT not set, defaulting to LocalStack");
+  awsEndpoint = "http://localhost:4566";
+}
+
+// SAFETY: Prevent accidental real AWS usage in local mode
+if (isLocal && awsEndpoint !== "http://localhost:4566") {
+  throw new Error(
+    `[api] ❌ SAFETY CHECK FAILED: Local mode must use LocalStack (http://localhost:4566), but AWS_ENDPOINT is "${awsEndpoint}"`
+  );
+}
+
+console.log("[api] AWS Config:", {
+  environment: process.env.ENVIRONMENT || process.env.NODE_ENV,
+  region: env.AWS_REGION,
+  endpoint: awsEndpoint || "AWS (production)",
+  isLocalStack: awsEndpoint === "http://localhost:4566"
+});
+
 const apiPublicBase = env.API_PUBLIC_BASE_URL?.trim().replace(/\/$/, "");
 const googleOAuthRedirectUri = apiPublicBase
   ? `${apiPublicBase}/auth/oauth/google/callback`
@@ -116,16 +150,26 @@ const githubOAuthRedirectUri = apiPublicBase
   : env.GITHUB_OAUTH_REDIRECT_URI;
 const gtmOAuthRedirectUri = apiPublicBase ? `${apiPublicBase}/gtm/oauth/callback` : env.GTM_OAUTH_REDIRECT_URI;
 
-const baseAws = {
+// Configure AWS clients with explicit credentials for LocalStack
+const baseAws: any = {
   region: env.AWS_REGION,
-  endpoint: env.AWS_ENDPOINT
+  endpoint: awsEndpoint
 };
+
+// Force test credentials for LocalStack to override ~/.aws/credentials
+if (isLocal || awsEndpoint === "http://localhost:4566") {
+  baseAws.credentials = {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "test",
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "test"
+  };
+  console.log("[api] 🔒 Using LocalStack test credentials (overriding ~/.aws/credentials)");
+}
+
 const ddbDoc = DynamoDBDocumentClient.from(new DynamoDBClient(baseAws));
 /** Path-style URLs are required for S3-compatible endpoints (e.g. LocalStack). */
 const s3 = new S3Client({
-  region: env.AWS_REGION,
-  endpoint: env.AWS_ENDPOINT,
-  forcePathStyle: Boolean(env.AWS_ENDPOINT)
+  ...baseAws,
+  forcePathStyle: Boolean(awsEndpoint)
 });
 const sqs = new SQSClient(baseAws);
 
@@ -1230,7 +1274,11 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const runId = (req.params as { runId: string }).runId;
-  const { approvedTagIds, serverContainerPath } = req.body as { approvedTagIds: string[]; serverContainerPath: string };
+  const { approvedTagIds, serverContainerPath, autoConfigureClient = true } = req.body as {
+    approvedTagIds: string[];
+    serverContainerPath: string;
+    autoConfigureClient?: boolean;
+  };
 
   if (!approvedTagIds || !Array.isArray(approvedTagIds) || approvedTagIds.length === 0) {
     return reply.code(400).send({ message: "approvedTagIds array required" });
@@ -1247,6 +1295,22 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
   }
 
   const report = JSON.parse(raw) as any;
+
+  // Get client container path from import record (for auto-configuring proxy tags)
+  let clientContainerPath: string | null = null;
+  let clientWorkspacePath: string | null = null;
+  if (autoConfigureClient && report.importId) {
+    try {
+      const importRecord = await ddbDoc.send(new GetCommand({
+        TableName: env.DDB_TABLE_IMPORTS,
+        Key: { importId: report.importId }
+      }));
+      clientContainerPath = importRecord.Item?.gtm?.containerPath || null;
+      clientWorkspacePath = importRecord.Item?.gtm?.workspacePath || null;
+    } catch (err) {
+      app.log.warn({ err }, "Could not fetch client container path from import");
+    }
+  }
   const approvedMappings = report.mappings.filter((m: any) => approvedTagIds.includes(m.clientTagId));
 
   // Get detected tags to access trigger information
@@ -1280,6 +1344,12 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
   const tm = google.tagmanager({ version: "v2", auth });
   const deployedTags: any[] = [];
   const errors: any[] = [];
+  const clientProxyTags: Array<{
+    triggerName: string;
+    customEventName: string;
+    originalTriggerIds: string[];
+    serverTriggerName: string;
+  }> = [];
 
   // Get or create workspace
   let workspacePath: string;
@@ -1358,6 +1428,93 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
         return null;
       }
 
+      // SPECIAL HANDLING: Trigger Groups
+      // Trigger groups reference child triggers via the 'filter' property
+      // We need to verify all child triggers can be migrated before creating the group
+      if (clientTrigger.type === 'triggerGroup' && clientTrigger.filter && Array.isArray(clientTrigger.filter)) {
+        const childTriggerIds: string[] = [];
+
+        // Extract trigger IDs from filter conditions
+        for (const filterCondition of clientTrigger.filter) {
+          if (filterCondition.type === 'EQUALS' && filterCondition.parameter) {
+            // Find the parameter with key 'arg0' which contains the child trigger ID
+            const arg0 = filterCondition.parameter.find((p: any) => p.key === 'arg0');
+            if (arg0?.value) {
+              childTriggerIds.push(arg0.value);
+            }
+          }
+        }
+
+        // Validate that all child triggers can migrate
+        const unmigratableChildren: string[] = [];
+        for (const childId of childTriggerIds) {
+          const childTrigger = containerTriggersMap.get(childId);
+          if (childTrigger) {
+            const childServerType = mapClientTriggerTypeToServer(childTrigger.type);
+            if (!childServerType) {
+              unmigratableChildren.push(`${childTrigger.name} (${childTrigger.type})`);
+            }
+          }
+        }
+
+        if (unmigratableChildren.length > 0) {
+          app.log.warn({
+            triggerGroupName: clientTriggerName,
+            unmigratableChildren
+          }, "Trigger group contains client-side only child triggers - creating custom event trigger instead");
+
+          // STRATEGY: Create a custom event trigger on server
+          // User will need to send this event from client when conditions are met
+          const customEventName = clientTriggerName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+
+          const customEventTrigger: any = {
+            name: clientTriggerName,
+            type: 'customEvent',
+            customEventFilter: [{
+              type: 'EQUALS',
+              parameter: [{
+                type: 'TEMPLATE',
+                key: 'arg0',
+                value: '{{_event}}'
+              }, {
+                type: 'TEMPLATE',
+                key: 'arg1',
+                value: customEventName
+              }]
+            }],
+            notes: `Client-side trigger group converted to custom event.\n\nOriginal conditions (client-side only):\n${unmigratableChildren.map(c => `- ${c}`).join('\n')}\n\nTo use this trigger, send a custom event from your client-side GTM:\ndataLayer.push({ event: '${customEventName}' });\n\nKeep the original trigger group on the client side and use it to fire a tag that sends this event.`
+          };
+
+          app.log.info({
+            clientTriggerName,
+            customEventName,
+            strategy: 'client-proxy'
+          }, "Creating custom event trigger as proxy for client-side conditions");
+
+          const created = await gtmCall(app.log, "triggers.create", () =>
+            tm.accounts.containers.workspaces.triggers.create({
+              parent: workspacePath,
+              requestBody: customEventTrigger
+            })
+          );
+
+          serverTriggers.push(created.data);
+          app.log.info({ triggerId: created.data.triggerId, triggerName: clientTriggerName }, "Created custom event proxy trigger");
+
+          // Record that we need to create a proxy tag on the client side
+          if (autoConfigureClient) {
+            clientProxyTags.push({
+              triggerName: clientTriggerName,
+              customEventName,
+              originalTriggerIds: childTriggerIds,
+              serverTriggerName: clientTriggerName
+            });
+          }
+
+          return created.data.triggerId || null;
+        }
+      }
+
       // Build trigger request body - start with basics
       const triggerBody: any = {
         name: clientTriggerName,
@@ -1427,54 +1584,14 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
 
   // Map client-side trigger types to server-side equivalents
   function mapClientTriggerTypeToServer(clientType: string): string | null {
-    const mapping: Record<string, string> = {
-      'pageview': 'serverPageview',
-      'PAGEVIEW': 'serverPageview',
-      'customEvent': 'customEvent',
-      'CUSTOM_EVENT': 'customEvent',
-      'dom': 'customEvent',  // Map DOM events to custom events
-      'click': 'customEvent',
-      'formSubmission': 'customEvent',
-      'historyChange': 'customEvent'
-    };
-
-    return mapping[clientType] || null;
+    // Use comprehensive trigger mapping registry
+    return CLIENT_TO_SERVER_TRIGGER_TYPE[clientType] || null;
   }
 
   // Map client-side tag types to server-side equivalents
   function mapClientTagTypeToServer(clientType: string): string | null {
-    const mapping: Record<string, string | null> = {
-      // GA4 / Google tag
-      'googtag': 'sgtmgaaw',       // Google tag -> Server-side Google Analytics 4
-      'gaawe': 'sgtmgaaw',          // GA4 Event -> Server-side Google Analytics 4
-      'gaawc': 'sgtmgaaw',          // GA4 Config -> Server-side Google Analytics 4
-
-      // Google Ads
-      'awct': 'sgtmgads',           // Google Ads Conversion -> Server-side Google Ads
-      'sp': 'sgtmgads',             // Remarketing -> Server-side Google Ads
-
-      // Meta/Facebook
-      'fbcapi': 'sgtmfbcapi',       // Facebook CAPI -> Server-side Facebook Conversions API (if available)
-
-      // Custom HTML tags cannot be migrated directly
-      'html': null,
-
-      // Custom templates - try to find server equivalent, but might need manual work
-      // Format: cvt_<template_id>
-    };
-
-    // Check for exact match first
-    if (clientType in mapping) {
-      return mapping[clientType];
-    }
-
-    // If it's a custom template (cvt_*), return null - needs manual review
-    if (clientType.startsWith('cvt_')) {
-      return null;
-    }
-
-    // Unknown type - return null
-    return null;
+    // Use comprehensive tag mapping registry
+    return CLIENT_TO_SERVER_TAG_TYPE[clientType] || null;
   }
 
   const templateResults: any[] = [];
@@ -1633,6 +1750,94 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
     }
   }
 
+  // Deploy client-side proxy tags if needed
+  const clientProxyResults: any[] = [];
+  if (autoConfigureClient && clientContainerPath && clientProxyTags.length > 0) {
+    app.log.info({
+      clientContainerPath,
+      proxyTagCount: clientProxyTags.length
+    }, "Deploying proxy tags to client container");
+
+    try {
+      // Get or use the client workspace
+      let clientWorkspace = clientWorkspacePath;
+      if (!clientWorkspace) {
+        const workspaces = await gtmCall(app.log, "workspaces.list", () =>
+          tm.accounts.containers.workspaces.list({ parent: clientContainerPath })
+        );
+        const defaultWs = workspaces.data.workspace?.find((w: any) => w.name === "Default Workspace");
+        clientWorkspace = defaultWs?.path || null;
+      }
+
+      if (!clientWorkspace) {
+        app.log.warn("No workspace found in client container - skipping proxy tag deployment");
+      } else {
+        // Create a Custom HTML tag for each proxy
+        for (const proxy of clientProxyTags) {
+          try {
+            const proxyTagBody: any = {
+              name: `[Tag Relay] Send ${proxy.customEventName}`,
+              type: 'html',
+              parameter: [{
+                type: 'TEMPLATE',
+                key: 'html',
+                value: `<script>\nwindow.dataLayer = window.dataLayer || [];\nwindow.dataLayer.push({event: '${proxy.customEventName}'});\n</script>`
+              }],
+              firingTriggerId: proxy.originalTriggerIds,
+              notes: `Auto-generated by Tag Relay to bridge client-side behavioral triggers to server-side container.\n\nThis tag fires when "${proxy.triggerName}" conditions are met and sends a custom event to the server-side container.`
+            };
+
+            const created = await gtmCall(app.log, "tags.create", () =>
+              tm.accounts.containers.workspaces.tags.create({
+                parent: clientWorkspace!,
+                requestBody: proxyTagBody
+              })
+            );
+
+            clientProxyResults.push({
+              triggerName: proxy.triggerName,
+              customEventName: proxy.customEventName,
+              clientTagId: created.data.tagId,
+              status: 'created'
+            });
+
+            app.log.info({
+              tagId: created.data.tagId,
+              triggerName: proxy.triggerName
+            }, "Created client proxy tag");
+          } catch (err) {
+            app.log.error({ err, proxy }, "Failed to create client proxy tag");
+            clientProxyResults.push({
+              triggerName: proxy.triggerName,
+              customEventName: proxy.customEventName,
+              status: 'failed',
+              error: gtmErrorMessage(err)
+            });
+          }
+        }
+      }
+    } catch (err) {
+      app.log.error({ err }, "Failed to access client container for proxy deployment");
+    }
+  }
+
+  const nextSteps = [
+    `Open your GTM server container workspace: ${workspacePath}`,
+    "Review deployed tags and configure with your account IDs (Measurement ID, API Secret, etc.)",
+    "Unpause tags after configuration",
+    "Test in GTM Preview mode"
+  ];
+
+  if (clientProxyResults.length > 0) {
+    nextSteps.push(
+      `✅ ${clientProxyResults.filter(p => p.status === 'created').length} proxy tags auto-created in your CLIENT container`,
+      "Open your client container workspace and publish the proxy tags",
+      "These proxy tags detect behavioral triggers and send events to the server"
+    );
+  }
+
+  nextSteps.push("Publish the workspace(s) when ready");
+
   return {
     runId,
     workspacePath,
@@ -1643,10 +1848,164 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
     templateResults,
     deployedTags,
     errors,
+    clientProxyTags: clientProxyResults,
+    nextSteps
+  };
+});
+
+app.post("/migrations/:runId/deploy-variables", async (req, reply) => {
+  if (!requireGtmOAuthConfigured(reply)) return;
+  const sessionId = getGtmSessionId(req);
+  if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
+  const auth = getOAuthClientForSession(sessionId);
+  if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
+
+  const runId = (req.params as { runId: string }).runId;
+  const { approvedVariableIds, serverContainerPath } = req.body as {
+    approvedVariableIds: string[];
+    serverContainerPath: string;
+  };
+
+  if (!approvedVariableIds || !Array.isArray(approvedVariableIds) || approvedVariableIds.length === 0) {
+    return reply.code(400).send({ message: "approvedVariableIds array required" });
+  }
+
+  if (!serverContainerPath || typeof serverContainerPath !== "string") {
+    return reply.code(400).send({ message: "serverContainerPath required" });
+  }
+
+  // Get the migration report
+  const raw = await s3ReadObjectText(`runs/${runId}/report.json`);
+  if (!raw) {
+    return reply.code(404).send({ message: "Migration report not found" });
+  }
+
+  const report = JSON.parse(raw) as any;
+
+  // Check if report has variable mappings
+  if (!report.variableMappings || !report.containerElements?.variables) {
+    return reply.code(400).send({ message: "No variable mappings found in this migration report" });
+  }
+
+  // Get full container variables
+  const containerVariablesMap = new Map();
+  if (report.containerElements?.variables) {
+    for (const variable of report.containerElements.variables) {
+      containerVariablesMap.set(variable.variableId, variable);
+    }
+  }
+
+  // Filter approved variables
+  const approvedVariables: any[] = [];
+  for (const variableId of approvedVariableIds) {
+    const variable = containerVariablesMap.get(variableId);
+    if (variable) {
+      approvedVariables.push(variable);
+    }
+  }
+
+  if (approvedVariables.length === 0) {
+    return reply.code(400).send({ message: "No approved variables found" });
+  }
+
+  const tm = google.tagmanager({ version: "v2", auth });
+  const deployedVariables: any[] = [];
+  const errors: any[] = [];
+
+  // Get or create workspace
+  let workspacePath: string;
+  try {
+    const workspaces = await gtmCall(app.log, "workspaces.list", () =>
+      tm.accounts.containers.workspaces.list({
+        parent: serverContainerPath
+      })
+    );
+
+    const defaultWorkspace = workspaces.data.workspace?.find((w: any) => w.name === "Default Workspace");
+    if (defaultWorkspace?.path) {
+      workspacePath = defaultWorkspace.path;
+    } else {
+      // Create a new workspace
+      const created = await gtmCall(app.log, "workspaces.create", () =>
+        tm.accounts.containers.workspaces.create({
+          parent: serverContainerPath,
+          requestBody: {
+            name: `Tag Relay Migration ${new Date().toISOString().split('T')[0]}`
+          }
+        })
+      );
+      workspacePath = created.data.path!;
+    }
+  } catch (err) {
+    app.log.error(err);
+    return reply.code(502).send({ message: "Failed to get or create workspace", error: gtmErrorMessage(err) });
+  }
+
+  // Sort variables by dependency order (constants first, then data layer, etc.)
+  const sortedVariables = sortVariablesByDependency(approvedVariables);
+
+  // Deploy variables in order
+  for (const clientVariable of sortedVariables) {
+    try {
+      app.log.info({
+        variableName: clientVariable.name,
+        variableId: clientVariable.variableId,
+        clientType: clientVariable.type
+      }, "Processing variable for deployment");
+
+      // Build server variable configuration
+      const result = buildServerVariableFromClient(clientVariable);
+      const variableRequestBody = result.config;
+
+      if (!result.canDeploy || variableRequestBody == null) {
+        errors.push({
+          clientVariableId: clientVariable.variableId,
+          clientVariableName: clientVariable.name,
+          error: result.reason || "Cannot deploy this variable type to server-side"
+        });
+        app.log.warn({ clientVariable: clientVariable.name, reason: result.reason }, "Variable cannot be deployed");
+        continue;
+      }
+
+      // Create the variable in server workspace
+      const created = await gtmCall(app.log, "variables.create", () =>
+        tm.accounts.containers.workspaces.variables.create({
+          parent: workspacePath,
+          requestBody: variableRequestBody
+        })
+      );
+
+      deployedVariables.push({
+        clientVariableId: clientVariable.variableId,
+        clientVariableName: clientVariable.name,
+        serverVariableId: created.data.variableId,
+        serverVariablePath: created.data.path,
+        serverType: result.serverType,
+        status: 'deployed'
+      });
+
+      app.log.info({ variableId: created.data.variableId }, `Deployed variable: ${clientVariable.name}`);
+    } catch (err) {
+      app.log.error({ err, variable: clientVariable.name }, "Failed to create variable");
+      errors.push({
+        clientVariableId: clientVariable.variableId,
+        clientVariableName: clientVariable.name,
+        error: gtmErrorMessage(err)
+      });
+    }
+  }
+
+  return {
+    runId,
+    workspacePath,
+    deployed: deployedVariables.length,
+    failed: errors.length,
+    deployedVariables,
+    errors,
     nextSteps: [
       `Open your GTM server container workspace: ${workspacePath}`,
-      "Review deployed tags and configure with your account IDs (Measurement ID, API Secret, etc.)",
-      "Unpause tags after configuration",
+      "Review deployed variables and verify configurations",
+      "Deploy tags that reference these variables",
       "Test in GTM Preview mode",
       "Publish the workspace when ready"
     ]

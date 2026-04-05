@@ -2,11 +2,12 @@ import { config as loadDotenv } from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Load repo-root .env
+// Load repo-root .env FIRST before any other imports
 const __repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../");
 loadDotenv({ path: resolve(__repoRoot, ".env") });
 loadDotenv({ path: resolve(__repoRoot, ".env.local"), override: true });
 
+// Now safe to import modules that depend on process.env
 import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { z } from "zod";
 import type { QueueMessage } from "./migration/types.js";
