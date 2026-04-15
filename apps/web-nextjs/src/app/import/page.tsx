@@ -2,11 +2,14 @@
 
 import { useRouter } from 'next/navigation';
 import { ProtectedRoute } from '@/lib/auth-context';
+import { useAlert } from '@/lib/alert-context';
 import ImportStepper from '@/components/ImportStepper';
 import { apiClient } from '@/lib/api-client';
+import AppHeader from '@/components/AppHeader';
 
 export default function ImportConnect() {
   const router = useRouter();
+  const alert = useAlert();
 
   const handleConnectGoogle = async () => {
     try {
@@ -15,18 +18,20 @@ export default function ImportConnect() {
       window.location.href = url;
     } catch (error) {
       console.error('Failed to start GTM OAuth:', error);
-      alert('Failed to connect to Google. Please try again.');
+      alert.error('Failed to connect to Google. Please try again.');
     }
   };
 
   return (
     <ProtectedRoute>
-      <main className="pt-24 pb-16 min-h-screen flex max-w-[1440px] mx-auto px-8 gap-12">
-        <ImportStepper currentStep={1} />
+      <div className="min-h-screen bg-[#131313]">
+        <AppHeader />
+        <main className="pt-8 pb-16 min-h-screen flex max-w-[1440px] mx-auto px-8 gap-12">
+          <ImportStepper currentStep={1} />
 
         <section className="flex-1">
           <header className="mb-12">
-            <h1 className="text-5xl font-bold tracking-tight text-white mb-4 headline-font">
+            <h1 className="text-3xl font-bold tracking-tight text-white mb-2 headline-font">
               Connect Google Account
             </h1>
             <p className="text-on-surface-variant text-lg max-w-2xl leading-relaxed">
@@ -39,7 +44,7 @@ export default function ImportConnect() {
             <div className="max-w-2xl mx-auto text-center space-y-8">
               {/* Icon */}
               <div className="w-24 h-24 rounded-full bg-primary-container/20 flex items-center justify-center mx-auto">
-                <svg className="w-12 h-12 text-[#ff553c]" fill="currentColor" viewBox="0 0 24 24">
+                <svg className="w-12 h-12 text-[#41ffaf]" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
                   <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
                   <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
@@ -59,7 +64,7 @@ export default function ImportConnect() {
 
               {/* Permissions List */}
               <div className="bg-surface-container-low rounded-lg p-6 text-left">
-                <h3 className="font-label text-xs uppercase tracking-widest text-[#ff553c] mb-4">
+                <h3 className="font-label text-xs uppercase tracking-widest text-[#41ffaf] mb-4">
                   Permissions Required
                 </h3>
                 <ul className="space-y-3">
@@ -96,7 +101,7 @@ export default function ImportConnect() {
               {/* Connect Button */}
               <button
                 onClick={handleConnectGoogle}
-                className="bg-[#ff553c] text-white px-12 py-4 rounded-xl font-bold tracking-tight hover:brightness-110 active:scale-95 transition-all shadow-xl shadow-[#ff553c]/10 flex items-center gap-3 mx-auto label-font"
+                className="bg-[#41ffaf] text-[#003822] px-12 py-4 rounded-xl font-bold tracking-tight hover:opacity-90 active:scale-95 transition-all shadow-xl shadow-[#41ffaf]/10 flex items-center gap-3 mx-auto label-font"
               >
                 Connect Google Account
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -124,6 +129,7 @@ export default function ImportConnect() {
           </div>
         </section>
       </main>
+      </div>
     </ProtectedRoute>
   );
 }

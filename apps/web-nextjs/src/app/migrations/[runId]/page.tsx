@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
+import { useAlert } from '@/lib/alert-context';
 import {
   apiClient,
   reconnectGoogleTagManager,
@@ -11,6 +12,7 @@ import {
   GTM_SESSION_STORAGE_KEY,
   Run
 } from '@/lib/api-client';
+import AppHeader from '@/components/AppHeader';
 
 interface DetectedTag {
   id: string;
@@ -76,7 +78,8 @@ export default function MigrationWorkspace() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { organization } = useAuth();
+  const { user, organization } = useAuth();
+  const alert = useAlert();
   const runId = params.runId as string;
 
   const [run, setRun] = useState<Run | null>(null);
@@ -105,6 +108,8 @@ export default function MigrationWorkspace() {
   // Deployment state
   const [isDeploying, setIsDeploying] = useState(false);
   const [deploymentResult, setDeploymentResult] = useState<any>(null);
+  const [clientContainerPath, setClientContainerPath] = useState('');
+  const [clientWorkspacePath, setClientWorkspacePath] = useState('');
   const [serverContainerPath, setServerContainerPath] = useState('');
   const [server_container_url, setserver_container_url] = useState('');
   const [serverContainers, setServerContainers] = useState<any[]>([]);
@@ -141,7 +146,7 @@ export default function MigrationWorkspace() {
 
   const handleGtmReconnect = () => {
     reconnectGoogleTagManager(`/migrations/${runId}`).catch(() =>
-      alert('Could not start GTM OAuth. Check you are logged in.')
+      alert.error('Could not start GTM OAuth. Check you are logged in.')
     );
   };
 
@@ -169,8 +174,8 @@ export default function MigrationWorkspace() {
       const gtmSessionId = getGtmSession();
       if (!gtmSessionId) {
         setNeedsGtmReconnect(true);
-        alert(
-          'No Google Tag Manager session is saved in this browser. Click "Reconnect GTM" in this dialog (next to Load containers or at the bottom), then try Load containers again.'
+        alert.warning(
+          'No Google Tag Manager session saved. Click "Reconnect GTM" to authenticate.'
         );
         return;
       }
@@ -202,7 +207,7 @@ export default function MigrationWorkspace() {
     } catch (err: any) {
       if (isGtmSessionApiError(err)) setNeedsGtmReconnect(true);
       addLog(`❌ Failed to load server containers: ${err?.message || 'unknown error'}`);
-      alert(`Failed to load server containers: ${err?.message || 'unknown error'}`);
+      alert.error(`Failed to load server containers: ${err?.message || 'unknown error'}`);
     } finally {
       setLoadingContainers(false);
     }
@@ -416,6 +421,20 @@ export default function MigrationWorkspace() {
 
         addLog(`Connected to migration ${runId.slice(0, 8)}...`);
         addLog(`Status: ${runData.status.toUpperCase()}`);
+
+        // Load client container info from import
+        if (runData.importId) {
+          try {
+            const importData = await apiClient.getImport(runData.importId);
+            if (importData.gtm?.containerPath && importData.gtm?.workspacePath) {
+              setClientContainerPath(importData.gtm.containerPath);
+              setClientWorkspacePath(importData.gtm.workspacePath);
+              addLog(`✅ Client container: ${importData.gtm.containerPath}`);
+            }
+          } catch (err: any) {
+            addLog(`⚠️ Could not load client container info: ${err.message}`);
+          }
+        }
 
         // Load previously deployed tags from deployment history
         if (runData.deploymentHistory && runData.deploymentHistory.length > 0) {
@@ -812,10 +831,12 @@ export default function MigrationWorkspace() {
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
-        <header className="bg-[#1A1A1A]/80 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center w-full px-8 h-16 border-b border-white/5">
-          <div className="flex items-center gap-8">
-            <span className="text-xl font-bold tracking-tighter text-[#41ffaf]">Ovalt</span>
-            <nav className="hidden md:flex gap-6 items-center">
+        <AppHeader />
+
+        {/* Page Sub-Navigation */}
+        <div className="bg-[#1A1A1A]/60 border-b border-white/5 px-8 py-3">
+          <div className="flex items-center justify-between">
+            <nav className="flex gap-6 items-center">
               <button
                 type="button"
                 onClick={() => setWorkspaceTab('review')}
@@ -825,7 +846,7 @@ export default function MigrationWorkspace() {
                     : 'text-gray-400 border-transparent hover:text-white'
                 }`}
               >
-                Tag review
+                Tag Review
               </button>
               <button
                 type="button"
@@ -836,23 +857,12 @@ export default function MigrationWorkspace() {
                     : 'text-gray-400 border-transparent hover:text-white'
                 }`}
               >
-                Deployment log
+                Deployment Log
                 {(isDeploying || deploymentResult) && (
                   <span className="h-2 w-2 rounded-full bg-[#41ffaf] animate-pulse" aria-hidden />
                 )}
               </button>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/migrations">
-                All migrations
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
-                Monitoring
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
-                Settings
-              </Link>
             </nav>
-          </div>
-          <div className="flex items-center gap-4">
             <button
               className="bg-[#41ffaf] text-[#003822] px-4 py-1.5 rounded-lg text-sm font-semibold hover:opacity-90 transition-all active:scale-95"
               onClick={() => setShowDeploymentModal(true)}
@@ -860,7 +870,7 @@ export default function MigrationWorkspace() {
               Deploy Changes
             </button>
           </div>
-        </header>
+        </div>
 
         {needsGtmReconnect && (
           <div className="bg-orange-950/80 border-b border-orange-500/40 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -914,7 +924,7 @@ export default function MigrationWorkspace() {
               <div className="max-w-4xl mx-auto w-full flex flex-col min-h-0 flex-1">
                 <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
                   <div>
-                    <h1 className="text-2xl font-bold text-white tracking-tight">Deployment log</h1>
+                    <h2 className="text-2xl font-bold text-white tracking-tight">Deployment log</h2>
                     <p className="text-sm text-[#bacbbe] mt-1">
                       Live output and results from GTM deploy. The API runs as one request; progress appears when it
                       completes.
@@ -1074,8 +1084,36 @@ export default function MigrationWorkspace() {
                     Reviewing {active?.[0] === 'all' ? 'Tags' : getClientTagTypeLabel(active?.[0])}
                   </h1>
                 </div>
-                <div className="flex items-center gap-3 bg-[#20201f] p-1 rounded-lg">
-                  <button className="px-4 py-2 text-xs font-semibold rounded bg-[#353535]">All Tags</button>
+                <div className="flex items-center gap-3">
+                  {active?.[0] === 'all' ? (
+                    <button
+                      onClick={() => {
+                        setApprovedTags(new Set(tagMappings.map((m) => m.clientTagId)));
+                        addLog(`✅ Approved all ${tagMappings.length} tag(s)`);
+                      }}
+                      className="px-5 py-2.5 text-sm font-semibold rounded-lg bg-[#41ffaf] text-[#003822] hover:opacity-90 transition-all flex items-center gap-2"
+                    >
+                      <span className="material-symbols-outlined text-base">check_circle</span>
+                      Approve All
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => approveAllInGroup(activeTags)}
+                      className="px-5 py-2.5 text-sm font-semibold rounded-lg bg-[#41ffaf] text-[#003822] hover:opacity-90 transition-all flex items-center gap-2"
+                    >
+                      <span className="material-symbols-outlined text-base">check_circle</span>
+                      Approve All {getClientTagTypeLabel(active?.[0])}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setApprovedTags(new Set());
+                      addLog(`🔄 Cleared all approvals`);
+                    }}
+                    className="px-4 py-2.5 text-xs font-semibold rounded-lg bg-[#353535] text-gray-300 hover:bg-[#404040] transition-all"
+                  >
+                    Clear All
+                  </button>
                 </div>
               </header>
 
@@ -1253,7 +1291,7 @@ export default function MigrationWorkspace() {
                   type="button"
                   onClick={() => {
                     if (approvedCount === 0) {
-                      alert('Approve at least one tag before opening deployment.');
+                      alert.warning('Approve at least one tag before opening deployment.');
                       return;
                     }
                     setShowDeploymentModal(true);
@@ -1305,7 +1343,7 @@ export default function MigrationWorkspace() {
               <div className="w-full md:w-1/3 bg-[#1c1b1b] p-8 border-r border-white/5 flex flex-col">
                 <div className="mb-8">
                   <h2 className="text-xs uppercase tracking-widest text-[#41ffaf] mb-2">Stage 04</h2>
-                  <h1 className="text-2xl font-bold leading-tight">Final Deployment Setup</h1>
+                  <h3 className="text-2xl font-bold leading-tight">Final Deployment Setup</h3>
                 </div>
 
                 <div className="bg-[#20201f] rounded-lg p-6 mb-8 border border-white/5">
@@ -1491,7 +1529,7 @@ export default function MigrationWorkspace() {
                               addLog(`✅ Created server container: ${result.publicId}`);
                             } catch (err: any) {
                               if (isGtmSessionApiError(err)) setNeedsGtmReconnect(true);
-                              alert(`Failed to create container: ${err.message}`);
+                              alert.error(`Failed to create container: ${err.message}`);
                             } finally {
                               setIsCreatingContainer(false);
                             }
@@ -1576,18 +1614,23 @@ export default function MigrationWorkspace() {
                   <button
                     onClick={async () => {
                       if (approvedTags.size === 0) {
-                        alert('Please approve at least one tag before deploying');
+                        alert.warning('Please approve at least one tag before deploying');
                         return;
                       }
                       if (!serverContainerPath) {
-                        alert('Select or create a server container first.');
+                        alert.warning('Select or create a server container first.');
+                        return;
+                      }
+                      if (!clientContainerPath || !clientWorkspacePath) {
+                        alert.error('Client container info not available. Please re-import your container.');
                         return;
                       }
                       setWorkspaceTab('deployment');
                       setIsDeploying(true);
                       setShowDeploymentModal(false);
                       addLog(`🚀 Starting deployment of ${approvedTags.size} approved tag(s)...`);
-                      addLog(`📦 Server container path: ${serverContainerPath}`);
+                      addLog(`📦 Client container: ${clientContainerPath}`);
+                      addLog(`📦 Server container: ${serverContainerPath}`);
                       if (server_container_url) addLog(`🌐 Server URL: ${server_container_url}`);
                       try {
                         const gtmSessionId = getGtmSession();
@@ -1601,6 +1644,8 @@ export default function MigrationWorkspace() {
                         const result = await apiClient.deployApprovedTags(
                           runId,
                           Array.from(approvedTags),
+                          clientContainerPath,
+                          clientWorkspacePath,
                           serverContainerPath,
                           server_container_url,
                           gtmSessionId
@@ -1615,7 +1660,7 @@ export default function MigrationWorkspace() {
                       } catch (error: any) {
                         if (isGtmSessionApiError(error)) setNeedsGtmReconnect(true);
                         addLog(`❌ Deployment failed: ${error.message}`);
-                        alert(`Deployment failed: ${error.message}`);
+                        alert.error(`Deployment failed: ${error.message}`);
                       } finally {
                         setIsDeploying(false);
                       }

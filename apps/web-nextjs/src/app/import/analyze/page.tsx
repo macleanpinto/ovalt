@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
 import ImportStepper from '@/components/ImportStepper';
 import { apiClient } from '@/lib/api-client';
+import AppHeader from '@/components/AppHeader';
 
 interface GTMContainer {
   containerId: string;
@@ -119,7 +120,7 @@ export default function ImportAnalyze() {
         );
       case 'importing':
         return (
-          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#ff553c]"></div>
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#41ffaf]"></div>
         );
       default:
         return (
@@ -135,7 +136,7 @@ export default function ImportAnalyze() {
       case 'error':
         return 'bg-[#93000a]/20 text-[#ffb4ab] border border-[#ffb4ab]/30';
       case 'importing':
-        return 'bg-[#ff553c]/20 text-[#ffdad4] border border-[#ff553c]/30';
+        return 'bg-[#41ffaf]/20 text-[#ffdad4] border border-[#41ffaf]/30';
       default:
         return 'bg-[#353535] text-[#c6c6c7] border border-[#5d3f3a]';
     }
@@ -143,12 +144,14 @@ export default function ImportAnalyze() {
 
   return (
     <ProtectedRoute>
-      <main className="pt-24 pb-16 min-h-screen flex max-w-[1440px] mx-auto px-8 gap-12">
-        <ImportStepper currentStep={3} />
+      <div className="min-h-screen bg-[#131313]">
+        <AppHeader />
+        <main className="pt-8 pb-16 min-h-screen flex max-w-[1440px] mx-auto px-8 gap-12">
+          <ImportStepper currentStep={isImporting ? 3 : 4} />
 
         <section className="flex-1">
           <header className="mb-12">
-            <h1 className="text-5xl font-bold tracking-tight text-white mb-4 headline-font">
+            <h1 className="text-3xl font-bold tracking-tight text-white mb-2 headline-font">
               {isImporting ? 'Importing Containers' : allSuccess ? 'Import Complete' : 'Import Finished'}
             </h1>
             <p className="text-on-surface-variant text-lg max-w-2xl leading-relaxed">
@@ -198,25 +201,25 @@ export default function ImportAnalyze() {
             <div className={`rounded-xl p-6 border mb-8 ${
               allSuccess
                 ? 'bg-gradient-to-r from-[#15a65e]/10 to-[#15a65e]/5 border-[#5fde8f]/20'
-                : 'bg-gradient-to-r from-[#ff553c]/10 to-[#ff553c]/5 border-[#ff553c]/20'
+                : 'bg-gradient-to-r from-[#41ffaf]/10 to-[#41ffaf]/5 border-[#41ffaf]/20'
             }`}>
               <div className="flex items-start gap-4">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                  allSuccess ? 'bg-[#15a65e]/20' : 'bg-[#ff553c]/20'
+                  allSuccess ? 'bg-[#15a65e]/20' : 'bg-[#41ffaf]/20'
                 }`}>
                   {allSuccess ? (
                     <svg className="w-5 h-5 text-[#7dfba9]" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                     </svg>
                   ) : (
-                    <svg className="w-5 h-5 text-[#ff553c]" fill="currentColor" viewBox="0 0 20 20">
+                    <svg className="w-5 h-5 text-[#41ffaf]" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                     </svg>
                   )}
                 </div>
                 <div>
                   <h4 className={`font-label text-sm uppercase tracking-widest mb-2 ${
-                    allSuccess ? 'text-[#7dfba9]' : 'text-[#ff553c]'
+                    allSuccess ? 'text-[#7dfba9]' : 'text-[#41ffaf]'
                   }`}>
                     {allSuccess ? 'All Containers Imported' : 'Some Imports Failed'}
                   </h4>
@@ -246,7 +249,7 @@ export default function ImportAnalyze() {
             {!isImporting && (
               <button
                 onClick={handleProceed}
-                className="bg-[#ff553c] text-white px-8 py-4 rounded-xl font-bold tracking-tight hover:brightness-110 active:scale-95 transition-all shadow-xl shadow-[#ff553c]/10 flex items-center gap-3 label-font"
+                className="bg-[#41ffaf] text-[#003822] px-8 py-4 rounded-xl font-bold tracking-tight hover:opacity-90 active:scale-95 transition-all shadow-xl shadow-[#41ffaf]/10 flex items-center gap-3 label-font"
               >
                 Go to Dashboard
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -257,6 +260,7 @@ export default function ImportAnalyze() {
           </div>
         </section>
       </main>
+      </div>
     </ProtectedRoute>
   );
 }

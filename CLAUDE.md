@@ -32,8 +32,11 @@ Project memory and operating guide for AI coding sessions in this repository.
 ### Nice-to-Haves
 
 - Monitoring dashboards.
-- Agency-oriented multi-client support.
 - Advanced routing/transforms and anomaly detection.
+
+### Architecture Notes
+
+- **Organizations**: Backend uses organizationId for data filtering, but UI hides this complexity from users. Each user has their own workspace. Multi-tenant agency features are not currently implemented.
 
 ## Technical Working Agreements
 

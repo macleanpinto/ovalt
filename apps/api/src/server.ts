@@ -744,36 +744,79 @@ app.post("/gtm/import-container", async (req, reply) => {
     const containerRes = await gtmCall(app.log, "containers.get", () => tm.accounts.containers.get({ path: containerPath }));
     const container = containerRes.data;
 
-    // Default to first workspace if not provided.
+    app.log.info({
+      containerPath,
+      publicId: container.publicId,
+      name: container.name
+    }, "Container info");
+
+    // Import from latest published version (live) by default, or specific workspace if provided
     let workspacePath: string | undefined;
+    let isLiveVersion = false;
+
     if (parsed.data.workspaceId) {
+      // User specified a workspace - use it (for testing/preview)
       workspacePath = `${containerPath}/workspaces/${parsed.data.workspaceId}`;
+      app.log.info({ workspacePath }, "Using specified workspace");
     } else {
+      // Default: Import from LIVE workspace (not published version)
+      // GTM doesn't expose a direct "live version" API, and workspaces contain the latest state
+      // The "Default Workspace" is typically workspace ID 1-3
       const workspaces = await gtmCall(app.log, "workspaces.list", () =>
         tm.accounts.containers.workspaces.list({ parent: containerPath })
       );
-      const first = workspaces.data.workspace?.[0];
-      if (first?.path) workspacePath = first.path;
+
+      app.log.info({
+        workspaceCount: workspaces.data.workspace?.length || 0,
+        workspaces: workspaces.data.workspace?.map(w => ({ name: w.name, id: w.workspaceId, path: w.path }))
+      }, "Available workspaces");
+
+      // Use the DEFAULT workspace (typically named "Default Workspace" or first one)
+      const defaultWorkspace = workspaces.data.workspace?.find(w =>
+        w.name?.toLowerCase().includes('default') || w.workspaceId === '1'
+      ) || workspaces.data.workspace?.[0];
+
+      if (defaultWorkspace?.path) {
+        workspacePath = defaultWorkspace.path;
+        app.log.info({
+          workspacePath,
+          workspaceName: defaultWorkspace.name,
+          workspaceId: defaultWorkspace.workspaceId
+        }, "Using default workspace");
+      }
     }
-    if (!workspacePath) return reply.code(400).send({ message: "No workspace available for container" });
+
+    if (!workspacePath) return reply.code(400).send({ message: "No workspace or published version available for container" });
 
     // Sequential + small gaps: parallel .list calls spike quota ("Queries per minute per user").
     const staggerMs = 450;
-    const tags = await gtmCall(app.log, "tags.list", () => tm.accounts.containers.workspaces.tags.list({ parent: workspacePath }));
+    let tags, triggers, variables, folders, builtins;
+
+    // Always import from workspace (not from version snapshot)
+    tags = await gtmCall(app.log, "tags.list", () =>
+      tm.accounts.containers.workspaces.tags.list({ parent: workspacePath })
+    );
+
+    app.log.info({
+      workspacePath,
+      tagCount: tags.data.tag?.length || 0,
+      tagNames: tags.data.tag?.map(t => t.name) || []
+    }, "Tags fetched from workspace");
+
     await delay(staggerMs);
-    const triggers = await gtmCall(app.log, "triggers.list", () =>
+    triggers = await gtmCall(app.log, "triggers.list", () =>
       tm.accounts.containers.workspaces.triggers.list({ parent: workspacePath })
     );
     await delay(staggerMs);
-    const variables = await gtmCall(app.log, "variables.list", () =>
+    variables = await gtmCall(app.log, "variables.list", () =>
       tm.accounts.containers.workspaces.variables.list({ parent: workspacePath })
     );
     await delay(staggerMs);
-    const folders = await gtmCall(app.log, "folders.list", () =>
+    folders = await gtmCall(app.log, "folders.list", () =>
       tm.accounts.containers.workspaces.folders.list({ parent: workspacePath })
     );
     await delay(staggerMs);
-    const builtins = await gtmCall(app.log, "built_in_variables.list", () =>
+    builtins = await gtmCall(app.log, "built_in_variables.list", () =>
       tm.accounts.containers.workspaces.built_in_variables.list({ parent: workspacePath })
     );
 
@@ -781,6 +824,7 @@ app.post("/gtm/import-container", async (req, reply) => {
       kind: "gtm_export_v2",
       container,
       workspacePath,
+      sourceType: "workspace",
       entities: {
         tags: tags.data.tag ?? [],
         triggers: triggers.data.trigger ?? [],
@@ -790,16 +834,16 @@ app.post("/gtm/import-container", async (req, reply) => {
       }
     };
 
-    // DEBUG: Log first tag to see if firingTriggerId exists
-    if (tags.data.tag && tags.data.tag.length > 0) {
-      const firstTag = tags.data.tag[0];
-      app.log.info({
-        tagName: firstTag.name,
-        tagId: firstTag.tagId,
-        firingTriggerId: firstTag.firingTriggerId,
-        hasFiringTriggerId: 'firingTriggerId' in firstTag
-      }, "DEBUG: First tag structure");
-    }
+    // Log import summary
+    app.log.info({
+      containerPath,
+      workspacePath,
+      sourceType: payload.sourceType,
+      tagCount: payload.entities.tags.length,
+      triggerCount: payload.entities.triggers.length,
+      variableCount: payload.entities.variables.length,
+      allTagNames: payload.entities.tags.map(t => t.name)
+    }, "GTM container import summary");
 
     // Reuse existing import storage pipeline.
     const importId = ulid();
@@ -828,7 +872,11 @@ app.post("/gtm/import-container", async (req, reply) => {
           rawBlobUri: `s3://${env.S3_BUCKET}/${rawKey}`,
           status: "uploaded",
           createdAt: now,
-          gtm: { containerPath, workspacePath }
+          gtm: {
+            containerPath,
+            workspacePath,
+            sourceType: "workspace"
+          }
         }
       })
     );
@@ -1127,6 +1175,7 @@ app.post("/migrations/:importId/run", async (req, reply) => {
       Item: {
         runId,
         importId,
+        organizationId: foundImport.Item.organizationId,
         projectId: foundImport.Item.projectId,
         status: "queued",
         rulesetVersion: parsed.data.rulesetVersion,
@@ -1502,1225 +1551,16 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
 });
 
 // Keep old endpoint for backwards compatibility
+// DEPRECATED: Use /migrations/:runId/deploy-approved-v2 instead
+// This endpoint tries to auto-fetch clientContainerPath from import record,
+// but it's more reliable to pass it explicitly (as v2 does).
+// Keeping this for backwards compatibility, but will be removed in future.
 app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
-  if (!requireGtmOAuthConfigured(reply)) return;
-  const sessionId = getGtmSessionId(req);
-  if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
-  if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
-
-  const runId = (req.params as { runId: string }).runId;
-  const { approvedTagIds, serverContainerPath, server_container_url, autoConfigureClient = true } = req.body as {
-    approvedTagIds: string[];
-    serverContainerPath: string;
-    server_container_url: string;
-    autoConfigureClient?: boolean;
-  };
-
-  if (!approvedTagIds || !Array.isArray(approvedTagIds) || approvedTagIds.length === 0) {
-    return reply.code(400).send({ message: "approvedTagIds array required" });
-  }
-
-  if (!serverContainerPath || typeof serverContainerPath !== "string") {
-    return reply.code(400).send({ message: "serverContainerPath required" });
-  }
-
-  if (!server_container_url || typeof server_container_url !== "string") {
-    return reply.code(400).send({ message: "server_container_url required (e.g. https://your-sgtm.example.com)" });
-  }
-
-  // Get the migration report
-  const raw = await s3ReadObjectText(`runs/${runId}/report.json`);
-  if (!raw) {
-    return reply.code(404).send({ message: "Migration report not found" });
-  }
-
-  const report = JSON.parse(raw) as any;
-
-  // Get client container path from import record (for auto-configuring proxy tags)
-  let clientContainerPath: string | null = null;
-  let clientWorkspacePath: string | null = null;
-  if (autoConfigureClient && report.importId) {
-    try {
-      const importRecord = await ddbDoc.send(new GetCommand({
-        TableName: env.DDB_TABLE_IMPORTS,
-        Key: { importId: report.importId }
-      }));
-      clientContainerPath = importRecord.Item?.gtm?.containerPath || null;
-      clientWorkspacePath = importRecord.Item?.gtm?.workspacePath || null;
-    } catch (err) {
-      app.log.warn({ err }, "Could not fetch client container path from import");
-    }
-  }
-  const approvedMappings = report.mappings.filter((m: any) => approvedTagIds.includes(m.clientTagId));
-
-  // Get detected tags to access trigger information
-  const detectedTagsMap = new Map();
-  if (report.detectedTags) {
-    for (const tag of report.detectedTags) {
-      detectedTagsMap.set(tag.id, tag);
-    }
-  }
-
-  // Get full container tags with all parameters
-  const containerTagsMap = new Map();
-  if (report.containerElements?.tags) {
-    for (const tag of report.containerElements.tags) {
-      containerTagsMap.set(tag.tagId, tag);
-    }
-  }
-
-  // Get container triggers for reference
-  const containerTriggersMap = new Map();
-  if (report.containerElements?.triggers) {
-    for (const trigger of report.containerElements.triggers) {
-      containerTriggersMap.set(trigger.triggerId, trigger);
-    }
-  }
-
-  if (approvedMappings.length === 0) {
-    return reply.code(400).send({ message: "No approved mappings found" });
-  }
-
-  const tm = google.tagmanager({ version: "v2", auth });
-  const deployedTags: any[] = [];
-  const errors: any[] = [];
-  const clientProxyTags: Array<{
-    triggerName: string;
-    customEventName: string;
-    originalTriggerIds: string[];
-    serverTriggerName: string;
-  }> = [];
-
-  // Get or create workspace
-  let workspacePath: string;
-  const WORKSPACE_NAME = "Tag Relay Migration";
-
-  try {
-    // Always start with a clean workspace - delete any previous Tag Relay workspaces
-    const workspaces = await gtmCall(app.log, "workspaces.list", () =>
-      tm.accounts.containers.workspaces.list({
-        parent: serverContainerPath
-      })
-    );
-
-    // Delete all existing Tag Relay workspaces to abandon unpublished changes
-    const tagRelayWorkspaces = workspaces.data.workspace?.filter((w: any) =>
-      w.name?.startsWith("Tag Relay")
-    ) || [];
-
-    if (tagRelayWorkspaces.length > 0) {
-      app.log.info({
-        count: tagRelayWorkspaces.length,
-        names: tagRelayWorkspaces.map((w: any) => w.name)
-      }, "Deleting existing Tag Relay workspaces to start fresh");
-
-      // Delete all old workspaces - MUST succeed before creating new one
-      for (const ws of tagRelayWorkspaces) {
-        if (ws.path) {
-          app.log.info({ workspacePath: ws.path, workspaceName: ws.name }, "Deleting workspace");
-
-          // Retry deletion up to 3 times if it fails
-          let deleteSuccess = false;
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-              await gtmCall(app.log, "workspaces.delete", () =>
-                tm.accounts.containers.workspaces.delete({
-                  path: ws.path!
-                })
-              );
-              app.log.info({ workspaceName: ws.name, attempt }, "Workspace deleted successfully");
-              deleteSuccess = true;
-              break;
-            } catch (deleteErr) {
-              if (attempt < 3) {
-                app.log.warn({
-                  err: deleteErr,
-                  workspaceName: ws.name,
-                  attempt
-                }, "Workspace deletion failed, retrying...");
-                // Wait 1 second before retry to let GTM API settle
-                await new Promise(resolve => setTimeout(resolve, 1000));
-              } else {
-                app.log.error({
-                  err: deleteErr,
-                  workspaceName: ws.name
-                }, "Failed to delete workspace after 3 attempts");
-                // If deletion fails after retries, throw error
-                return reply.code(502).send({
-                  message: "Failed to delete existing workspace. Please manually delete the 'Tag Relay Migration' workspace in GTM and try again.",
-                  error: gtmErrorMessage(deleteErr),
-                  workspacePath: ws.path
-                });
-              }
-            }
-          }
-        }
-      }
-
-      // Wait a moment after all deletions to let GTM API settle
-      app.log.info("Waiting for GTM API to settle after deletions...");
-      await new Promise(resolve => setTimeout(resolve, 1500));
-    } else {
-      app.log.info("No existing Tag Relay workspaces found");
-    }
-
-    // Create a fresh workspace for this deployment
-    app.log.info({ workspaceName: WORKSPACE_NAME }, "Creating new workspace");
-    const created = await gtmCall(app.log, "workspaces.create", () =>
-      tm.accounts.containers.workspaces.create({
-        parent: serverContainerPath,
-        requestBody: {
-          name: WORKSPACE_NAME,
-          description: "Automated server-side migration workspace created by Tag Relay"
-        }
-      })
-    );
-    workspacePath = created.data.path!;
-    app.log.info({ workspacePath, workspaceName: WORKSPACE_NAME }, "Created fresh workspace for deployment");
-  } catch (err) {
-    app.log.error({ err }, "Failed to create workspace");
-    return reply.code(502).send({ message: "Failed to create clean workspace", error: gtmErrorMessage(err) });
-  }
-
-  // Determine which client types are needed based on approved tags
-  const neededClients = new Set<string>();
-  const clientTagModifications: Array<{
-    clientTagId: string;
-    clientTagName: string;
-    clientType: string;
-    clientToCreate: string;
-  }> = [];
-
-  for (const mapping of approvedMappings) {
-    const rawClientTag = containerTagsMap.get(mapping.clientTagId);
-    if (!rawClientTag) continue;
-
-    const clientType = rawClientTag.type;
-    const serverType = mapClientTagTypeToServer(clientType);
-
-    // Check if this tag type needs client-side routing to server
-    // GA4 tags (all variants)
-    if (clientType === 'gaawe' || clientType === 'googtag' || clientType === 'gaawc' || serverType === 'sgtmgaaw') {
-      neededClients.add('ga4');
-      clientTagModifications.push({
-        clientTagId: mapping.clientTagId,
-        clientTagName: mapping.clientTagName,
-        clientType,
-        clientToCreate: 'ga4'
-      });
-    }
-    // Google Ads tags (conversion, remarketing)
-    else if (clientType === 'awct' || clientType === 'sp' || serverType === 'sgtmgads') {
-      neededClients.add('googads');
-      clientTagModifications.push({
-        clientTagId: mapping.clientTagId,
-        clientTagName: mapping.clientTagName,
-        clientType,
-        clientToCreate: 'googads'
-      });
-    }
-    // Floodlight tags
-    else if (clientType === 'fls' || clientType === 'flc' || serverType === 'sgtmflood') {
-      neededClients.add('floodlight');
-      clientTagModifications.push({
-        clientTagId: mapping.clientTagId,
-        clientTagName: mapping.clientTagName,
-        clientType,
-        clientToCreate: 'floodlight'
-      });
-    }
-  }
-
-  app.log.info({
-    neededClients: Array.from(neededClients),
-    tagsToModify: clientTagModifications.length,
-    tagTypes: approvedMappings.map((m: any) => {
-      const tag = containerTagsMap.get(m.clientTagId);
-      return tag ? `${tag.type} → ${mapClientTagTypeToServer(tag.type)}` : 'unknown';
-    })
-  }, "Determined client requirements for migration");
-
-  // Warn if no clients are needed (might indicate tags don't use client-side routing)
-  if (neededClients.size === 0) {
-    app.log.warn({
-      approvedTagCount: approvedMappings.length,
-      tagTypes: approvedMappings.map((m: any) => {
-        const tag = containerTagsMap.get(m.clientTagId);
-        return tag?.type;
-      })
-    }, "No clients needed - tags may not require client-side routing or use direct server integration");
-  }
-
-  // Create server-side triggers (without clients for simpler migration)
-  const serverClients: Array<{ name: string; clientId: string; triggerId: string }> = [];
-  const serverTriggers: any[] = []; // Store all created triggers for lookup
-
-  // For each needed client type, create an "All Events" trigger instead of a client
-  // This allows tags to fire on all incoming requests without complex client setup
-  for (const clientType of neededClients) {
-    try {
-      let triggerName: string;
-      let triggerNotes: string;
-
-      if (clientType === 'ga4') {
-        triggerName = 'All GA4 Events';
-        triggerNotes = 'Auto-created by Tag Relay. Fires on all incoming requests for GA4 tags. Client-side tags route events to server via server_container_url.';
-      } else if (clientType === 'googads') {
-        triggerName = 'All Google Ads Events';
-        triggerNotes = 'Auto-created by Tag Relay. Fires on all incoming requests for Google Ads tags.';
-      } else if (clientType === 'floodlight') {
-        triggerName = 'All Floodlight Events';
-        triggerNotes = 'Auto-created by Tag Relay. Fires on all incoming requests for Floodlight tags.';
-      } else {
-        app.log.warn({ clientType }, "Unknown client type - skipping trigger creation");
-        continue;
-      }
-
-      // Create a filtered trigger that only fires for the specific client type
-      // Server-side triggers use type 'always' with filter conditions
-      let triggerConfig: any = {
-        type: 'always',
-        name: triggerName,
-        notes: triggerNotes
-      };
-
-      if (clientType === 'ga4') {
-        // Filter for GA4 events: check if x-ga-measurement_id request header exists
-        // This header is present in all GA4 requests to server-side GTM
-        triggerConfig.filter = [
-          {
-            type: 'contains',
-            parameter: [
-              { type: 'template', key: 'arg0', value: '{{x-ga-measurement_id}}' },
-              { type: 'template', key: 'arg1', value: 'G-' }
-            ]
-          }
-        ];
-      } else if (clientType === 'googads') {
-        // Filter for Google Ads conversion events
-        triggerConfig.filter = [
-          {
-            type: 'matchRegex',
-            parameter: [
-              { type: 'template', key: 'arg0', value: '{{x-ga-gcs_origin}}' },
-              { type: 'template', key: 'arg1', value: 'ads' }
-            ]
-          }
-        ];
-      } else if (clientType === 'floodlight') {
-        // Filter for Floodlight events
-        triggerConfig.filter = [
-          {
-            type: 'contains',
-            parameter: [
-              { type: 'template', key: 'arg0', value: '{{Page Path}}' },
-              { type: 'template', key: 'arg1', value: 'fls' }
-            ]
-          }
-        ];
-      }
-
-      const triggerRes = await gtmCall(app.log, "triggers.create", () =>
-        tm.accounts.containers.workspaces.triggers.create({
-          parent: workspacePath,
-          requestBody: triggerConfig
-        })
-      );
-
-      const triggerId = triggerRes.data.triggerId;
-      app.log.info(
-        { triggerId, triggerName, clientType },
-        "✅ Created 'All Events' trigger for server tags"
-      );
-
-      // Store the full trigger for later lookup (important for tag attachment)
-      if (triggerRes.data) {
-        serverTriggers.push(triggerRes.data);
-      }
-
-      // Store in serverClients array for compatibility (even though we're not creating actual clients)
-      if (triggerId) {
-        serverClients.push({
-          name: triggerName,
-          clientId: '', // No client created
-          triggerId
-        });
-      }
-
-    } catch (err) {
-      app.log.error({ err, clientType }, "Failed to create trigger");
-      errors.push({
-        clientType,
-        error: `Failed to create trigger for ${clientType}: ${gtmErrorMessage(err)}`
-      });
-    }
-  }
-
-  // Get all triggers in server workspace and append to our created triggers array
-  try {
-    const triggersRes = await gtmCall(app.log, "triggers.list", () =>
-      tm.accounts.containers.workspaces.triggers.list({
-        parent: workspacePath
-      })
-    );
-    // Append API-loaded triggers to our array (avoiding duplicates by checking triggerId)
-    const existingIds = new Set(serverTriggers.map((t: any) => t.triggerId).filter(Boolean));
-    const newTriggers = (triggersRes.data.trigger || []).filter((t: any) => !existingIds.has(t.triggerId));
-    serverTriggers.push(...newTriggers);
-  } catch (err) {
-    app.log.warn("Failed to list triggers in server workspace");
-  }
-
-  // Helper function to create or find matching trigger in server container
-  async function getOrCreateServerTrigger(clientTriggerName: string): Promise<string | null> {
-    // Check if trigger already exists in server container
-    const existing = serverTriggers.find((t: any) => t.name === clientTriggerName);
-    if (existing) {
-      app.log.info({ triggerName: clientTriggerName, triggerId: existing.triggerId }, "Using existing server trigger");
-      return existing.triggerId;
-    }
-
-    // Get client trigger details
-    const clientTrigger = containerTriggersMap.get(clientTriggerName) ||
-                          Array.from(containerTriggersMap.values()).find((t: any) => t.name === clientTriggerName);
-
-    if (!clientTrigger) {
-      app.log.warn({ clientTriggerName }, "Client trigger not found in report");
-      return null;
-    }
-
-    // DEBUG: Log client trigger structure
-    app.log.info({
-      triggerName: clientTrigger.name,
-      type: clientTrigger.type,
-      eventName: clientTrigger.eventName,
-      customEventFilter: clientTrigger.customEventFilter,
-      filter: clientTrigger.filter
-    }, "DEBUG: Client trigger structure");
-
-    // Create server-side trigger based on client trigger
-    try {
-      const serverTriggerType = mapClientTriggerTypeToServer(clientTrigger.type);
-      if (!serverTriggerType) {
-        app.log.warn({ clientTriggerType: clientTrigger.type }, "Cannot map client trigger type to server");
-        return null;
-      }
-
-      // SPECIAL HANDLING: Trigger Groups
-      // Trigger groups reference child triggers via the 'filter' property
-      // We need to verify all child triggers can be migrated before creating the group
-      if (clientTrigger.type === 'triggerGroup' && clientTrigger.filter && Array.isArray(clientTrigger.filter)) {
-        const childTriggerIds: string[] = [];
-
-        // Extract trigger IDs from filter conditions
-        for (const filterCondition of clientTrigger.filter) {
-          const condType = String(filterCondition.type || '').toLowerCase();
-          if (condType === 'equals' && filterCondition.parameter) {
-            // Find the parameter with key 'arg0' which contains the child trigger ID
-            const arg0 = filterCondition.parameter.find((p: any) => p.key === 'arg0');
-            if (arg0?.value) {
-              childTriggerIds.push(arg0.value);
-            }
-          }
-        }
-
-        // Validate that all child triggers can migrate
-        const unmigratableChildren: string[] = [];
-        for (const childId of childTriggerIds) {
-          const childTrigger = containerTriggersMap.get(childId);
-          if (childTrigger) {
-            const childServerType = mapClientTriggerTypeToServer(childTrigger.type);
-            if (!childServerType) {
-              unmigratableChildren.push(`${childTrigger.name} (${childTrigger.type})`);
-            }
-          }
-        }
-
-        if (unmigratableChildren.length > 0) {
-          app.log.warn({
-            triggerGroupName: clientTriggerName,
-            unmigratableChildren
-          }, "Trigger group contains client-side only child triggers - creating custom event trigger instead");
-
-          // STRATEGY: Create a custom event trigger on server
-          // User will need to send this event from client when conditions are met
-          const customEventName = clientTriggerName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-
-          const customEventTrigger: any = {
-            name: clientTriggerName,
-            type: 'customEvent',
-            customEventFilter: [{
-              type: 'equals',
-              parameter: [{
-                type: 'template',
-                key: 'arg0',
-                value: '{{_event}}'
-              }, {
-                type: 'template',
-                key: 'arg1',
-                value: customEventName
-              }]
-            }],
-            notes: `Client-side trigger group converted to custom event.\n\nOriginal conditions (client-side only):\n${unmigratableChildren.map(c => `- ${c}`).join('\n')}\n\nTo use this trigger, send a custom event from your client-side GTM:\ndataLayer.push({ event: '${customEventName}' });\n\nKeep the original trigger group on the client side and use it to fire a tag that sends this event.`
-          };
-
-          app.log.info({
-            clientTriggerName,
-            customEventName,
-            strategy: 'client-proxy'
-          }, "Creating custom event trigger as proxy for client-side conditions");
-
-          const created = await gtmCall(app.log, "triggers.create", () =>
-            tm.accounts.containers.workspaces.triggers.create({
-              parent: workspacePath,
-              requestBody: customEventTrigger
-            })
-          );
-
-          serverTriggers.push(created.data);
-          app.log.info({ triggerId: created.data.triggerId, triggerName: clientTriggerName }, "Created custom event proxy trigger");
-
-          // Record that we need to create a proxy tag on the client side
-          if (autoConfigureClient) {
-            clientProxyTags.push({
-              triggerName: clientTriggerName,
-              customEventName,
-              originalTriggerIds: childTriggerIds,
-              serverTriggerName: clientTriggerName
-            });
-          }
-
-          return created.data.triggerId || null;
-        }
-      }
-
-      // Build trigger request body - start with basics
-      const triggerBody: any = {
-        name: clientTriggerName,
-        type: serverTriggerType
-      };
-
-      // Copy relevant properties from client trigger based on type
-      // This is generic - copies whatever structure GTM provides
-
-      // Copy custom event filter (for customEvent triggers)
-      if (clientTrigger.customEventFilter) {
-        triggerBody.customEventFilter = clientTrigger.customEventFilter;
-      }
-
-      // Copy general filters (for all trigger types)
-      if (clientTrigger.filter) {
-        triggerBody.filter = clientTrigger.filter;
-      }
-
-      // Copy event name (some trigger types have this)
-      if (clientTrigger.eventName) {
-        triggerBody.eventName = clientTrigger.eventName;
-      }
-
-      // Copy parameters (if any)
-      if (clientTrigger.parameter) {
-        triggerBody.parameter = clientTrigger.parameter;
-      }
-
-      // Copy wait settings (for timer triggers, etc.)
-      if (clientTrigger.waitForTags) {
-        triggerBody.waitForTags = clientTrigger.waitForTags;
-      }
-      if (clientTrigger.checkValidation) {
-        triggerBody.checkValidation = clientTrigger.checkValidation;
-      }
-      if (clientTrigger.waitForTagsTimeout) {
-        triggerBody.waitForTagsTimeout = clientTrigger.waitForTagsTimeout;
-      }
-
-      // Copy auto-event filter settings
-      if (clientTrigger.autoEventFilter) {
-        triggerBody.autoEventFilter = clientTrigger.autoEventFilter;
-      }
-
-      app.log.info({
-        clientTriggerName,
-        clientType: clientTrigger.type,
-        serverTriggerType,
-        copiedFields: Object.keys(triggerBody).filter(k => k !== 'name' && k !== 'type')
-      }, "Creating server-side trigger");
-      const created = await gtmCall(app.log, "triggers.create", () =>
-        tm.accounts.containers.workspaces.triggers.create({
-          parent: workspacePath,
-          requestBody: triggerBody
-        })
-      );
-
-      serverTriggers.push(created.data);
-      app.log.info({ triggerId: created.data.triggerId, triggerName: clientTriggerName }, "Created server trigger");
-      return created.data.triggerId || null;
-    } catch (err) {
-      app.log.error({ err, clientTriggerName }, "Failed to create server trigger");
-      return null;
-    }
-  }
-
-  // Map client-side trigger types to server-side equivalents
-  function mapClientTriggerTypeToServer(clientType: string): string | null {
-    // Use comprehensive trigger mapping registry
-    return CLIENT_TO_SERVER_TRIGGER_TYPE[clientType] || null;
-  }
-
-  // Map client-side tag types to server-side equivalents
-  function mapClientTagTypeToServer(clientType: string): string | null {
-    // Use comprehensive tag mapping registry
-    return CLIENT_TO_SERVER_TAG_TYPE[clientType] || null;
-  }
-
-  const templateResults: any[] = [];
-
-  /** One consolidated server tag per client GTM tag type (e.g. gaawe vs googtag each get their own server tag). */
-  const tagsByClientTagType = new Map<string, Array<{
-    mapping: any;
-    rawTag: any;
-    clientMod: any;
-  }>>();
-
-  for (const mapping of approvedMappings) {
-    const rawClientTag = containerTagsMap.get(mapping.clientTagId);
-    if (!rawClientTag) {
-      errors.push({
-        clientTagId: mapping.clientTagId,
-        clientTagName: mapping.clientTagName,
-        error: 'Client tag not found in container data'
-      });
-      continue;
-    }
-
-    const serverType = mapClientTagTypeToServer(rawClientTag.type);
-    if (!serverType) {
-      errors.push({
-        clientTagId: mapping.clientTagId,
-        clientTagName: mapping.clientTagName,
-        error: `Tag type "${rawClientTag.type}" cannot be automatically migrated to server-side.`
-      });
-      continue;
-    }
-
-    const clientMod = clientTagModifications.find(m => m.clientTagId === mapping.clientTagId);
-    const clientTagType = rawClientTag.type;
-
-    if (!tagsByClientTagType.has(clientTagType)) {
-      tagsByClientTagType.set(clientTagType, []);
-    }
-    tagsByClientTagType.get(clientTagType)!.push({ mapping, rawTag: rawClientTag, clientMod });
-  }
-
-  app.log.info({
-    clientTagTypeCount: tagsByClientTagType.size,
-    clientTagTypes: Array.from(tagsByClientTagType.keys())
-  }, "Grouped tags by client tag type (one server tag per type)");
-
-  // Create ONE server tag per client tag type
-  for (const [clientTagType, tagsGroup] of tagsByClientTagType.entries()) {
-    const serverType = mapClientTagTypeToServer(clientTagType);
-    if (!serverType) {
-      for (const { mapping } of tagsGroup) {
-        errors.push({
-          clientTagId: mapping.clientTagId,
-          clientTagName: mapping.clientTagName,
-          error: `Tag type "${clientTagType}" has no server-side mapping`
-        });
-      }
-      continue;
-    }
-
-    try {
-      // Use the first tag in the group as a template
-      const { mapping: firstMapping, rawTag: firstRawTag } = tagsGroup[0];
-      const groupClientMod = tagsGroup.map((t) => t.clientMod).find(Boolean) ?? null;
-
-      // Determine a generic name for this consolidated tag
-      const typeLabel = serverType === 'sgtmgaaw' ? 'GA4 Events' :
-                        serverType === 'sgtmgads' ? 'Google Ads Conversions' :
-                        serverType === 'sgtmmeta' ? 'Meta Events' :
-                        `${serverType} Events`;
-
-      const tagName = tagsGroup.length === 1
-        ? `${firstMapping.clientTagName} (Server)`
-        : `${typeLabel} [${clientTagType}] (${tagsGroup.length} tags)`;
-
-      app.log.info({
-        clientTagType,
-        serverType,
-        tagName,
-        clientTagCount: tagsGroup.length,
-        clientTagIds: tagsGroup.map(t => t.mapping.clientTagId)
-      }, "Creating consolidated server tag");
-
-      // Copy ALL parameters from the first client tag (generic approach)
-      const parameters: any[] = [];
-      if (firstRawTag.parameter && Array.isArray(firstRawTag.parameter)) {
-        for (const param of firstRawTag.parameter) {
-          // IMPORTANT: For consolidated GA4 server tags with multiple events, SKIP the eventName parameter
-          // The server tag will automatically read event_name from the incoming GA4 request payload
-          // This preserves the original event name from each client-side tag (purchase, add_to_cart, etc.)
-          if (tagsGroup.length > 1 && param.key === 'eventName' && param.type === 'TEMPLATE' && serverType === 'sgtmgaaw') {
-            // Skip eventName parameter - let server tag read from request
-            app.log.info({
-              originalEventName: param.value,
-              consolidatedTagCount: tagsGroup.length,
-              serverType
-            }, "Skipped eventName parameter for consolidated GA4 server tag - will auto-read from client request");
-            continue; // Don't add this parameter
-          } else {
-            parameters.push(param);
-          }
-        }
-      }
-
-      // Build server tag config by copying properties from first client tag
-      const clientTagNames = tagsGroup.map(t => t.mapping.clientTagName).join(', ');
-      const isConsolidatedGA4 = tagsGroup.length > 1 && serverType === 'sgtmgaaw';
-      const eventNameNote = isConsolidatedGA4
-        ? 'Automatically reads event_name from incoming client requests to preserve original event names (purchase, add_to_cart, etc.).'
-        : '';
-      const tagConfig: any = {
-        type: serverType,
-        parameter: parameters,
-        tagFiringOption: firstRawTag.tagFiringOption || 'ONCE_PER_EVENT',
-        notes: `Consolidated server tag (client tag type: ${clientTagType}) for ${tagsGroup.length} client-side tag(s): ${clientTagNames}. ${eventNameNote}`.trim()
-      };
-
-      // Copy ALL optional properties from first client tag (generic copy)
-      if (firstRawTag.consentSettings) {
-        tagConfig.consentSettings = firstRawTag.consentSettings;
-        app.log.info({ consentSettings: firstRawTag.consentSettings }, "Copied consent settings");
-      }
-
-      if (firstRawTag.monitoringMetadata) {
-        tagConfig.monitoringMetadata = firstRawTag.monitoringMetadata;
-      }
-
-      if (firstRawTag.setupTag) {
-        tagConfig.setupTag = firstRawTag.setupTag;
-      }
-
-      if (firstRawTag.teardownTag) {
-        tagConfig.teardownTag = firstRawTag.teardownTag;
-      }
-
-      if (firstRawTag.priority) {
-        tagConfig.priority = firstRawTag.priority;
-      }
-
-      if (firstRawTag.liveOnly) {
-        tagConfig.liveOnly = firstRawTag.liveOnly;
-      }
-
-      if (firstRawTag.scheduleStartMs) {
-        tagConfig.scheduleStartMs = firstRawTag.scheduleStartMs;
-      }
-
-      if (firstRawTag.scheduleEndMs) {
-        tagConfig.scheduleEndMs = firstRawTag.scheduleEndMs;
-      }
-
-      app.log.info({
-        clientType: firstRawTag.type,
-        serverType,
-        parametersCopied: parameters.length,
-        hasConsent: !!tagConfig.consentSettings
-      }, "Server tag prepared");
-
-      // Create the tag
-      const tagBody: any = {
-        name: tagName,
-        ...tagConfig
-      };
-
-      // Determine which trigger to use on server
-      // For GA4/Ads/Floodlight with client-side routing, use the client-routing trigger (all events from that client)
-      if (groupClientMod) {
-        const client = serverClients.find(c =>
-          (groupClientMod.clientToCreate === 'ga4' && c.name === 'GA4') ||
-          (groupClientMod.clientToCreate === 'googads' && c.name === 'Google Ads') ||
-          (groupClientMod.clientToCreate === 'floodlight' && c.name === 'Floodlight')
-        );
-
-        if (client?.triggerId) {
-          tagBody.firingTriggerId = [client.triggerId];
-          app.log.info({
-            clientType: groupClientMod.clientToCreate,
-            triggerName: client.name,
-            triggerId: client.triggerId
-          }, "Attached client-routing trigger to server tag");
-        } else {
-          app.log.warn({ clientMod: groupClientMod }, "Client routing trigger not found - tag may not fire");
-        }
-      } else {
-        // This tag doesn't use client routing → try to recreate behavioral triggers
-        // Collect all triggers from all tags in the group
-        const allTriggerIds = new Set<string>();
-        for (const { mapping } of tagsGroup) {
-          const detectedTag = detectedTagsMap.get(mapping.clientTagId);
-          if (detectedTag?.firingTriggerIds && detectedTag.firingTriggerIds.length > 0) {
-            detectedTag.firingTriggerIds.forEach((tid: string) => allTriggerIds.add(tid));
-          }
-        }
-
-        if (allTriggerIds.size > 0) {
-          app.log.info({
-            clientTagCount: tagsGroup.length,
-            firingTriggerIds: Array.from(allTriggerIds)
-          }, "Processing triggers for consolidated tag");
-
-          const serverTriggerIds: string[] = [];
-          for (const clientTriggerId of allTriggerIds) {
-            const clientTrigger = containerTriggersMap.get(clientTriggerId);
-            if (clientTrigger) {
-              const serverTriggerId = await getOrCreateServerTrigger(clientTrigger.name);
-              if (serverTriggerId) {
-                serverTriggerIds.push(serverTriggerId);
-              }
-            }
-          }
-
-          if (serverTriggerIds.length > 0) {
-            tagBody.firingTriggerId = serverTriggerIds;
-            app.log.info({ serverTriggerIds }, "Attached triggers to consolidated tag");
-          } else {
-            app.log.warn("No server triggers could be created/found for this tag");
-          }
-        } else {
-          app.log.info({ clientTagCount: tagsGroup.length }, "No triggers found for client tags in group");
-        }
-      }
-
-      // Fallback: attach by trigger name if API client list missed (e.g. partial failure) but triggers exist in workspace
-      if (!tagBody.firingTriggerId?.length && groupClientMod) {
-        const triggerNameByRouting: Record<string, string> = {
-          ga4: 'All GA4 Events',
-          googads: 'All Google Ads Events',
-          floodlight: 'All Floodlight Events'
-        };
-        const wantName = triggerNameByRouting[groupClientMod.clientToCreate];
-        if (wantName) {
-          const t = serverTriggers.find((x: any) => x.name === wantName && x.triggerId);
-          if (t?.triggerId) {
-            tagBody.firingTriggerId = [t.triggerId];
-            app.log.info({ triggerId: t.triggerId, wantName }, "✅ Attached All Events trigger by name (fallback)");
-          }
-        }
-      }
-
-      // Last resort: GA4 server tags should always fire on all GA4 events
-      if (!tagBody.firingTriggerId?.length && serverType === 'sgtmgaaw') {
-        const t = serverTriggers.find((x: any) => x.name === 'All GA4 Events' && x.triggerId);
-        if (t?.triggerId) {
-          tagBody.firingTriggerId = [t.triggerId];
-          app.log.info({ triggerId: t.triggerId }, "✅ Attached 'All GA4 Events' trigger for sgtmgaaw tag (last resort)");
-        }
-      }
-
-      const created = await gtmCall(app.log, "tags.create", () =>
-        tm.accounts.containers.workspaces.tags.create({
-          parent: workspacePath,
-          requestBody: tagBody
-        })
-      );
-
-      // VALIDATION: Check if triggers were attached
-      if (!tagBody.firingTriggerId || tagBody.firingTriggerId.length === 0) {
-        app.log.error({
-          tagName: tagBody.name,
-          serverType,
-          hasClientRouting: !!groupClientMod,
-          serverClientsAvailable: serverClients.length,
-          serverTriggersAvailable: serverTriggers.length
-        }, "WARNING: Tag created WITHOUT triggers - it will not fire! Manual configuration required.");
-
-        // Add to errors array so user sees this
-        errors.push({
-          clientTagId: tagsGroup[0].mapping.clientTagId,
-          clientTagName: tagsGroup[0].mapping.clientTagName,
-          error: `Tag "${tagBody.name}" was created but no triggers were attached. The tag will not fire. Please manually add triggers in GTM.`,
-          details: {
-            serverType,
-            expectedClientType: groupClientMod?.clientToCreate,
-            serverClientsCreated: serverClients.map(c => c.name),
-            serverTriggersCreated: serverTriggers.map((t: any) => t.name)
-          }
-        });
-      } else {
-        app.log.info({
-          tagName: tagBody.name,
-          triggerIds: tagBody.firingTriggerId,
-          triggerCount: tagBody.firingTriggerId.length
-        }, "✅ Tag created with triggers attached");
-      }
-
-      // Record deployment for ALL client tags in this group
-      const serverTagId = created.data.tagId;
-      const serverTagPath = created.data.path;
-      for (const { mapping } of tagsGroup) {
-        deployedTags.push({
-          clientTagId: mapping.clientTagId,
-          clientTagName: mapping.clientTagName,
-          serverTagId,
-          serverTagPath,
-          status: 'deployed',
-          needsConfiguration: true,
-          sharedServerTag: tagsGroup.length > 1 // Flag that this is a consolidated tag
-        });
-      }
-
-      app.log.info({
-        tagId: serverTagId,
-        clientTagCount: tagsGroup.length
-      }, `Deployed consolidated tag: ${tagName}`);
-    } catch (err) {
-      app.log.error({ err, clientTagType, serverType, clientTagCount: tagsGroup.length }, "Failed to create consolidated tag");
-      // Mark all tags in this group as failed
-      for (const { mapping } of tagsGroup) {
-        errors.push({
-          clientTagId: mapping.clientTagId,
-          clientTagName: mapping.clientTagName,
-          error: gtmErrorMessage(err)
-        });
-      }
-    }
-  }
-
-  // Deploy client-side proxy tags if needed
-  const clientProxyResults: any[] = [];
-  if (autoConfigureClient && clientContainerPath && clientProxyTags.length > 0) {
-    app.log.info({
-      clientContainerPath,
-      proxyTagCount: clientProxyTags.length
-    }, "Deploying proxy tags to client container");
-
-    try {
-      // ALWAYS dynamically resolve workspace - GTM may delete/recreate workspaces after publish
-      let clientWorkspace: string | null = null;
-
-      const workspacesRes = await gtmCall(app.log, "workspaces.list", () =>
-        tm.accounts.containers.workspaces.list({ parent: clientContainerPath })
-      );
-
-      const workspaces = workspacesRes.data.workspace || [];
-
-      if (workspaces.length === 0) {
-        // No workspace exists - create one
-        app.log.info("No workspace found in client container - creating one for proxy tags");
-
-        try {
-          const newWorkspace = await gtmCall(app.log, "workspaces.create", () =>
-            tm.accounts.containers.workspaces.create({
-              parent: clientContainerPath,
-              requestBody: {
-                name: 'Tag Relay Client Updates',
-                description: 'Workspace created by Tag Relay for routing client tags to server-side GTM container'
-              }
-            })
-          );
-
-          clientWorkspace = newWorkspace.data.path || null;
-          app.log.info({ workspacePath: clientWorkspace }, "Created new client workspace for proxy tags");
-        } catch (createErr) {
-          app.log.error({ err: createErr }, "Failed to create client workspace for proxy tags");
-        }
-      } else {
-        // Use the first available workspace
-        clientWorkspace = workspaces[0].path || null;
-        app.log.info({
-          workspacePath: clientWorkspace,
-          workspaceName: workspaces[0].name
-        }, "Using existing client workspace for proxy tags");
-      }
-
-      if (!clientWorkspace) {
-        app.log.warn("No workspace found in client container - skipping proxy tag deployment");
-      } else {
-        // Create a Custom HTML tag for each proxy
-        for (const proxy of clientProxyTags) {
-          try {
-            const proxyTagBody: any = {
-              name: `[Tag Relay] Send ${proxy.customEventName}`,
-              type: 'html',
-              parameter: [{
-                type: 'TEMPLATE',
-                key: 'html',
-                value: `<script>\nwindow.dataLayer = window.dataLayer || [];\nwindow.dataLayer.push({event: '${proxy.customEventName}'});\n</script>`
-              }],
-              firingTriggerId: proxy.originalTriggerIds,
-              notes: `Auto-generated by Tag Relay to bridge client-side behavioral triggers to server-side container.\n\nThis tag fires when "${proxy.triggerName}" conditions are met and sends a custom event to the server-side container.`
-            };
-
-            const created = await gtmCall(app.log, "tags.create", () =>
-              tm.accounts.containers.workspaces.tags.create({
-                parent: clientWorkspace!,
-                requestBody: proxyTagBody
-              })
-            );
-
-            clientProxyResults.push({
-              triggerName: proxy.triggerName,
-              customEventName: proxy.customEventName,
-              clientTagId: created.data.tagId,
-              status: 'created'
-            });
-
-            app.log.info({
-              tagId: created.data.tagId,
-              triggerName: proxy.triggerName
-            }, "Created client proxy tag");
-          } catch (err) {
-            app.log.error({ err, proxy }, "Failed to create client proxy tag");
-            clientProxyResults.push({
-              triggerName: proxy.triggerName,
-              customEventName: proxy.customEventName,
-              status: 'failed',
-              error: gtmErrorMessage(err)
-            });
-          }
-        }
-      }
-    } catch (err) {
-      app.log.error({ err }, "Failed to access client container for proxy deployment");
-    }
-  }
-
-  // Modify client-side tags to route to server container
-  const modifiedClientTags: any[] = [];
-  if (autoConfigureClient && clientContainerPath && clientTagModifications.length > 0) {
-    app.log.info({
-      clientContainerPath,
-      tagsToModify: clientTagModifications.length
-    }, "Modifying client-side tags to route to server");
-
-    try {
-      // ALWAYS dynamically resolve workspace - GTM may delete/recreate workspaces after publish
-      let clientWorkspace: string | null = null;
-
-      const workspacesRes = await gtmCall(app.log, "workspaces.list", () =>
-        tm.accounts.containers.workspaces.list({ parent: clientContainerPath })
-      );
-
-      const workspaces = workspacesRes.data.workspace || [];
-
-      if (workspaces.length === 0) {
-        // No workspace exists - create one called "Tag Relay Client Updates"
-        app.log.info("No workspace found in client container - creating one for tag modifications");
-
-        try {
-          const newWorkspace = await gtmCall(app.log, "workspaces.create", () =>
-            tm.accounts.containers.workspaces.create({
-              parent: clientContainerPath,
-              requestBody: {
-                name: 'Tag Relay Client Updates',
-                description: 'Workspace created by Tag Relay for routing client tags to server-side GTM container'
-              }
-            })
-          );
-
-          clientWorkspace = newWorkspace.data.path || null;
-          app.log.info({ workspacePath: clientWorkspace, workspaceName: 'Tag Relay Client Updates' }, "Created new client workspace");
-        } catch (createErr) {
-          app.log.error({ err: createErr }, "Failed to create client workspace");
-        }
-      } else {
-        // Use the first available workspace (GTM's "current" workspace)
-        clientWorkspace = workspaces[0].path || null;
-        app.log.info({
-          workspacePath: clientWorkspace,
-          workspaceName: workspaces[0].name,
-          totalWorkspaces: workspaces.length
-        }, "Using existing client workspace");
-      }
-
-      if (!clientWorkspace) {
-        app.log.warn("No workspace available in client container - skipping client tag modifications");
-      } else {
-        // Get all tags in client workspace
-        const clientTagsRes = await gtmCall(app.log, "tags.list", () =>
-          tm.accounts.containers.workspaces.tags.list({
-            parent: clientWorkspace!
-          })
-        );
-
-        const clientTagsById = new Map<string, any>();
-        for (const tag of clientTagsRes.data.tag || []) {
-          if (tag.tagId) {
-            clientTagsById.set(tag.tagId, tag);
-          }
-        }
-
-        // Modify each tag
-        for (const mod of clientTagModifications) {
-          const clientTag = clientTagsById.get(mod.clientTagId);
-          if (!clientTag || !clientTag.path) {
-            app.log.warn({ clientTagId: mod.clientTagId }, "Client tag not found in workspace");
-            continue;
-          }
-
-          try {
-            // Clone the tag's parameters and add server routing
-            // Filter out any existing server routing parameters
-            const updatedParameters = (clientTag.parameter || []).filter((p: any) =>
-              p.key !== 'server_container_url' && p.key !== 'transportUrl'
-            );
-
-            // Add server routing parameters
-            if (mod.clientToCreate === 'ga4') {
-              // ONLY Google Tag (googtag/gaawc) supports server_container_url
-              // GA4 Event tags (gaawe) do NOT support these parameters - GTM silently rejects them
-              if (clientTag.type === 'googtag' || clientTag.type === 'gaawc') {
-                updatedParameters.push({
-                  type: 'TEMPLATE',
-                  key: 'server_container_url',
-                  value: server_container_url
-                });
-                updatedParameters.push({
-                  type: 'TEMPLATE',
-                  key: 'transportUrl',
-                  value: server_container_url
-                });
-              } else {
-                // GA4 Event tags (gaawe) should not be modified - they're replaced by Google Tag
-                app.log.info({ tagType: clientTag.type, tagName: clientTag.name },
-                  "Skipping client tag modification - GA4 Event tags don't support server_container_url");
-                continue; // Skip this modification
-              }
-            } else if (mod.clientToCreate === 'googads') {
-              // Google Ads tags need server_container_url
-              updatedParameters.push({
-                type: 'TEMPLATE',
-                key: 'server_container_url',
-                value: server_container_url
-              });
-            }
-
-            // Update the tag
-            const updated = await gtmCall(app.log, "tags.update", () =>
-              tm.accounts.containers.workspaces.tags.update({
-                path: clientTag.path,
-                requestBody: {
-                  ...clientTag,
-                  parameter: updatedParameters,
-                  notes: (clientTag.notes || '') + `\n\n[Modified by Tag Relay] Routes to server container: ${server_container_url}`
-                }
-              })
-            );
-
-            modifiedClientTags.push({
-              clientTagId: mod.clientTagId,
-              clientTagName: mod.clientTagName,
-              routingAdded: mod.clientToCreate,
-              status: 'modified'
-            });
-
-            app.log.info({
-              tagId: mod.clientTagId,
-              tagName: mod.clientTagName,
-              clientType: mod.clientToCreate
-            }, "Modified client tag to route to server");
-
-          } catch (err) {
-            app.log.error({ err, mod }, "Failed to modify client tag");
-            modifiedClientTags.push({
-              clientTagId: mod.clientTagId,
-              clientTagName: mod.clientTagName,
-              routingAdded: mod.clientToCreate,
-              status: 'failed',
-              error: gtmErrorMessage(err)
-            });
-          }
-        }
-      }
-    } catch (err) {
-      app.log.error({ err }, "Failed to access client container for tag modifications");
-    }
-  }
-
-  const nextSteps = [
-    `✅ SERVER CONTAINER: Open workspace: ${workspacePath}`,
-    `   - ${serverClients.length} client(s) created: ${serverClients.map(c => c.name).join(', ')}`,
-    `   - ${deployedTags.length} tag(s) deployed`,
-    "   - Review and configure tags with your account IDs (Measurement ID, etc.)",
-    "   - Unpause tags after configuration"
-  ];
-
-  if (modifiedClientTags.length > 0) {
-    const successfulMods = modifiedClientTags.filter(m => m.status === 'modified').length;
-    nextSteps.push(
-      "",
-      `✅ CLIENT CONTAINER: ${successfulMods} tag(s) modified to route to server`,
-      `   - Modified tags now send data to: ${server_container_url}`,
-      `   - Client tags keep same triggers (scroll, time, etc.)`,
-      `   - Data flows: Browser → Your Server → Google/Meta/etc.`
-    );
-  }
-
-  if (clientProxyResults.length > 0) {
-    nextSteps.push(
-      "",
-      `✅ CLIENT CONTAINER: ${clientProxyResults.filter(p => p.status === 'created').length} proxy tag(s) created`,
-      "   - These detect behavioral triggers and send custom events to server"
-    );
-  }
-
-  nextSteps.push(
-    "",
-    "🚀 PUBLISH:",
-    "   1. Test in GTM Preview mode (both containers)",
-    "   2. Publish CLIENT container first",
-    "   3. Publish SERVER container",
-    "   4. Monitor data flow in server Preview and GA4 DebugView"
-  );
-
-  // Save deployment result to DynamoDB for persistence
-  const deploymentRecord = {
-    timestamp: new Date().toISOString(),
-    deployed: deployedTags.length,
-    failed: errors.length,
-    deployedTagIds: deployedTags.map(t => t.clientTagId),
-    serverContainerPath,
-    server_container_url,
-    workspacePath
-  };
-
-  try {
-    await ddbDoc.send(
-      new UpdateCommand({
-        TableName: env.DDB_TABLE_RUNS,
-        Key: { runId },
-        UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp",
-        ExpressionAttributeValues: {
-          ":deployment": [deploymentRecord],
-          ":empty": [],
-          ":timestamp": deploymentRecord.timestamp
-        }
-      })
-    );
-    app.log.info({ runId, deployed: deployedTags.length }, "Saved deployment result to DynamoDB");
-  } catch (err) {
-    app.log.error({ err, runId }, "Failed to save deployment result to DynamoDB");
-    // Don't fail the deployment if we can't save - just log it
-  }
-
-  return {
-    runId,
-    workspacePath,
-    deployed: deployedTags.length,
-    failed: errors.length,
-    templatesDeployed: templateResults.filter(t => t.status === 'created').length,
-    templatesReused: templateResults.filter(t => t.status === 'exists').length,
-    templateResults,
-    deployedTags,
-    errors,
-    serverClients,
-    modifiedClientTags,
-    clientProxyTags: clientProxyResults,
-    nextSteps
-  };
+  return reply.code(410).send({
+    message: "This endpoint is deprecated. Use /migrations/:runId/deploy-approved-v2 instead.",
+    error: "DEPRECATED_ENDPOINT",
+    suggestion: "Update your client to use /migrations/:runId/deploy-approved-v2 with explicit clientContainerPath and clientWorkspacePath parameters."
+  });
 });
 
 app.post("/migrations/:runId/deploy-variables", async (req, reply) => {

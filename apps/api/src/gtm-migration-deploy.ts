@@ -4,8 +4,14 @@
  * This module handles the deployment of migrated tags:
  * 1. Fetch all tags/triggers/variables from client workspace
  * 2. Modify tags to add server_container_url
- * 3. Create new "Ovalt Migration Workspace" and copy modified entities
- * 4. Create consolidated server tags (one per tag type)
+ * 3. Create new "Ovalt Migration Workspace" in client container with modified tags
+ * 4. Create new "Ovalt Migration Workspace" in server container
+ * 5. Copy required variables to server workspace
+ * 6. Create consolidated server tags (one per tag type)
+ *
+ * WORKSPACE NAMING:
+ * - Both client and server use the same workspace name: "Ovalt Migration Workspace"
+ * - This makes it easy to identify migration workspaces in both containers
  *
  * BLOCKING TRIGGERS:
  * - Single vendor (e.g., only GA4): No blocking triggers created - tag fires on all events
@@ -296,7 +302,7 @@ export async function deployMigrationWithExportImport(
       parent: request.clientContainerPath,
       requestBody: {
         name: CLIENT_WORKSPACE_NAME,
-        description: 'Migrated tags with server-side routing configured by Tag Relay'
+        description: 'Client-side tags modified to route to server-side GTM. Created by Ovalt.'
       }
     })
   );
@@ -408,7 +414,7 @@ export async function deployMigrationWithExportImport(
   // ================================================================
   // STEP 4: Create consolidated server tags
   // ================================================================
-  const SERVER_WORKSPACE_NAME = 'Tag Relay Migration';
+  const SERVER_WORKSPACE_NAME = 'Ovalt Migration Workspace';
   log.info({ workspaceName: SERVER_WORKSPACE_NAME }, 'Creating server workspace');
 
   const serverWorkspaces = await gtmCall(log, 'workspaces.list', () =>
@@ -416,7 +422,7 @@ export async function deployMigrationWithExportImport(
   );
 
   const existingServerWorkspace = serverWorkspaces.data.workspace?.find(
-    (w: any) => w.name?.startsWith('Tag Relay')
+    (w: any) => w.name === 'Ovalt Migration Workspace'
   );
 
   if (existingServerWorkspace?.path) {
@@ -432,13 +438,89 @@ export async function deployMigrationWithExportImport(
       parent: request.serverContainerPath,
       requestBody: {
         name: SERVER_WORKSPACE_NAME,
-        description: 'Consolidated server-side tags created by Tag Relay'
+        description: 'Consolidated server-side tags receiving events from client container. Created by Ovalt.'
       }
     })
   );
 
   const serverWorkspacePath = serverWorkspace.data.path!;
   log.info({ workspacePath: serverWorkspacePath }, 'Created server workspace');
+
+  // ================================================================
+  // STEP 5: Copy required variables to server workspace
+  // ================================================================
+  // Extract all variable references from approved tags and copy them to server
+  const variableReferences = new Set<string>();
+  for (const [_, clientTags] of request.tagsByType.entries()) {
+    for (const tag of clientTags) {
+      const params = tag.parameter || [];
+      for (const param of params) {
+        // Check for variable references in format {{Variable Name}}
+        const value = param.value || '';
+        const matches = value.match(/\{\{([^}]+)\}\}/g);
+        if (matches) {
+          for (const match of matches) {
+            const varName = match.replace(/\{\{|\}\}/g, '').trim();
+            variableReferences.add(varName);
+          }
+        }
+        // Also check nested list/map parameters
+        if (param.list) {
+          for (const item of param.list) {
+            if (item.map) {
+              for (const mapEntry of item.map) {
+                const val = mapEntry.value || '';
+                const nestedMatches = val.match(/\{\{([^}]+)\}\}/g);
+                if (nestedMatches) {
+                  for (const match of nestedMatches) {
+                    const varName = match.replace(/\{\{|\}\}/g, '').trim();
+                    variableReferences.add(varName);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  log.info({
+    variableReferencesCount: variableReferences.size,
+    variables: Array.from(variableReferences)
+  }, 'Found variable references in approved tags');
+
+  // Copy referenced variables to server workspace
+  const serverVariableIdMap = new Map<string, string>();
+  for (const varRef of variableReferences) {
+    // Find variable in original variables by name
+    const variable = originalVariables.find(v => v.name === varRef);
+    if (!variable) {
+      log.warn({ variableName: varRef }, 'Variable reference not found in client workspace, skipping');
+      continue;
+    }
+
+    try {
+      const created = await gtmCall(log, 'variables.create', () =>
+        tm.accounts.containers.workspaces.variables.create({
+          parent: serverWorkspacePath,
+          requestBody: {
+            name: variable.name,
+            type: variable.type,
+            parameter: variable.parameter,
+            notes: (variable.notes || '') + '\n\n[Copied by Tag Relay from client workspace]'
+          }
+        })
+      );
+      serverVariableIdMap.set(variable.name!, created.data.variableId!);
+      log.info({ variableName: variable.name, variableType: variable.type }, 'Created variable in server workspace');
+      await delay(200);
+    } catch (err: any) {
+      log.warn({ variableName: variable.name, err: err.message }, 'Failed to create variable in server, will continue without it');
+    }
+  }
+
+  log.info({ variablesCreated: serverVariableIdMap.size }, 'Copied variables to server workspace');
 
   // Create one "All Events" trigger that fires on all requests
   const allEventsTrigger = await gtmCall(log, 'triggers.create', () =>
@@ -522,6 +604,9 @@ export async function deployMigrationWithExportImport(
     }
   }
 
+  // ================================================================
+  // STEP 6: Create consolidated server tags
+  // ================================================================
   // Create one server tag per category with blocking triggers
   const serverTagsCreated: Array<{
     tagId: string;
@@ -547,7 +632,22 @@ export async function deployMigrationWithExportImport(
                     `${category} - All Events (Server)`;
 
     const templateTag = clientTags[0];
-    const parameters = templateTag.parameter || [];
+
+    // Server-side tags don't need client-side parameters
+    // They only create clients and route events from incoming requests
+    let parameters: any[] = [];
+
+    if (category === 'ga4' && serverType === 'sgtmgaaw') {
+      // GA4 server tags only need eventName
+      parameters = [
+        {
+          type: 'template',
+          key: 'eventName',
+          value: '{{Event Name}}'
+        }
+      ];
+    }
+    // Other server tags (Meta, Google Ads) work with empty parameters
 
     const serverTag = await gtmCall(log, 'tags.create', () =>
       tm.accounts.containers.workspaces.tags.create({
