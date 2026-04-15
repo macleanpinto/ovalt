@@ -5,44 +5,69 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
 import { apiClient, Import } from '@/lib/api-client';
+import { useAlert } from '@/lib/alert-context';
+import AppHeader from '@/components/AppHeader';
 
 export default function ImportsPage() {
   const router = useRouter();
   const { organization } = useAuth();
+  const alert = useAlert();
   const [imports, setImports] = useState<Import[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creatingMigration, setCreatingMigration] = useState<string | null>(null);
   const [deletingImport, setDeletingImport] = useState<string | null>(null);
 
-  useEffect(() => {
-    const loadImports = async () => {
-      if (!organization) return;
+  const loadImports = async () => {
+    if (!organization) return;
 
-      try {
-        setIsLoading(true);
-        const importsData = await apiClient.getImports(organization.organizationId);
-        setImports(importsData);
-      } catch (err: any) {
-        setError(err.message || 'Failed to load imports');
-      } finally {
-        setIsLoading(false);
+    try {
+      setIsLoading(true);
+      const importsData = await apiClient.getImports(organization.organizationId);
+      setImports(importsData);
+    } catch (err: any) {
+      console.error('[Imports] Failed to load imports:', err);
+      setError(err.message || 'Failed to load imports');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadImports();
+  }, [organization]);
+
+  // Refresh when page becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && organization) {
+        loadImports();
       }
     };
 
-    loadImports();
+    const handleFocus = () => {
+      if (organization) {
+        loadImports();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [organization]);
 
   const handleCreateMigration = async (importId: string) => {
     try {
       setCreatingMigration(importId);
-      console.log('Creating migration for import:', importId);
       const run = await apiClient.createRun(importId);
-      console.log('Migration created:', run);
       router.push(`/migrations/${run.runId}`);
     } catch (err: any) {
       console.error('Failed to create migration:', err);
-      alert(`Failed to create migration: ${err.message}\n\nStatus: ${err.status || 'unknown'}\n\nCheck console for details.`);
+      alert.error(`Failed to create migration: ${err.message}`);
       setCreatingMigration(null);
     }
   };
@@ -58,7 +83,7 @@ export default function ImportsPage() {
       setImports(prev => prev.filter(imp => imp.importId !== importId));
     } catch (err: any) {
       console.error('Failed to delete import:', err);
-      alert(`Failed to delete import: ${err.message}`);
+      alert.error(`Failed to delete import: ${err.message}`);
     } finally {
       setDeletingImport(null);
     }
@@ -94,22 +119,7 @@ export default function ImportsPage() {
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
-        <header className="bg-[#1A1A1A]/80 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center w-full px-8 h-16 border-b border-white/5">
-          <div className="flex items-center gap-8">
-            <span className="text-xl font-bold tracking-tighter text-[#41ffaf]">Ovalt</span>
-            <nav className="hidden md:flex gap-6 items-center">
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
-                Dashboard
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/imports">
-                Imports
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/migrations">
-                All migrations
-              </Link>
-            </nav>
-          </div>
-        </header>
+        <AppHeader />
 
         <main className="p-8">
           <div className="max-w-7xl mx-auto">
@@ -118,10 +128,29 @@ export default function ImportsPage() {
               <div>
                 <h1 className="text-3xl font-bold mb-2 text-white headline-font">Imports</h1>
                 <p className="text-[#bacbbe]">
-                  View all imported containers for {organization?.name || 'your organization'}
+                  View all your imported containers
                 </p>
               </div>
               <div className="flex gap-3">
+                {imports.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Delete all ${imports.length} import(s)?\n\nThis will also delete associated migrations. This cannot be undone.`)) {
+                        return;
+                      }
+                      try {
+                        await Promise.all(imports.map(imp => apiClient.deleteImport(imp.importId)));
+                        setImports([]);
+                        alert.success('All imports deleted');
+                      } catch (err: any) {
+                        alert.error(`Failed to delete some imports: ${err.message}`);
+                      }
+                    }}
+                    className="px-6 py-3 bg-red-500/10 text-red-400 rounded-xl hover:bg-red-500/20 transition-colors label-font border border-red-500/30"
+                  >
+                    Delete All
+                  </button>
+                )}
                 <Link
                   href="/import"
                   className="px-6 py-3 bg-[#41ffaf] text-[#003822] rounded-xl font-semibold label-font hover:opacity-90 transition-all"

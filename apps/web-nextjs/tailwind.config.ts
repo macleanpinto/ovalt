@@ -61,7 +61,8 @@ const config: Config = {
       fontFamily: {
         "headline": ["Inter", "sans-serif"],
         "body": ["Inter", "sans-serif"],
-        "label": ["Space Grotesk", "sans-serif"]
+        "label": ["Inter", "sans-serif"],
+        "mono": ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas", "monospace"]
       },
       borderRadius: {
         "DEFAULT": "0.125rem",

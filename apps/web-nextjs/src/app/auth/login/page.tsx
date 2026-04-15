@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/lib/auth-context";
 import { apiClient } from "@/lib/api-client";
 
@@ -37,20 +36,20 @@ export default function Login() {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <Link href="/" className="inline-flex mb-4 justify-center">
-            <BrandLogo />
+            <span className="text-4xl font-bold tracking-tighter text-[#41ffaf]">Ovalt</span>
           </Link>
           <h1 className="text-3xl font-bold mb-2 text-white headline-font">Welcome Back</h1>
-          <p className="text-[#e6bdb6]">
+          <p className="text-[#bacbbe]">
             Sign in to continue your migration
           </p>
         </div>
 
-        <div className="bg-[#20201f] border border-[#5d3f3a]/15 rounded-2xl shadow-2xl p-8">
+        <div className="bg-[#20201f] border border-white/10 rounded-2xl shadow-2xl p-8">
           {/* OAuth Buttons */}
           <div className="space-y-3 mb-6">
             <button
               onClick={() => handleOAuthLogin("google")}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-[#ad8881]/30 rounded-xl hover:bg-[#2a2a2a] transition-colors text-white"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-white/10 rounded-xl hover:bg-[#2a2a2a] transition-colors text-white"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path
@@ -86,7 +85,7 @@ export default function Login() {
 
           <div className="relative mb-6">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-[#5d3f3a]"></div>
+              <div className="w-full border-t border-white/10"></div>
             </div>
             <div className="relative flex justify-center text-sm">
               <span className="px-2 bg-[#20201f] text-white/40">
@@ -113,7 +112,7 @@ export default function Login() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-[#ad8881]/30 rounded-xl focus:ring-2 focus:ring-[#ffb4a7] focus:border-transparent bg-[#1c1b1b] text-white placeholder-white/40"
+                className="w-full px-4 py-2 border border-white/10 rounded-xl focus:ring-2 focus:ring-[#41ffaf]/40 focus:border-transparent bg-[#1c1b1b] text-white placeholder-white/40"
                 placeholder="you@example.com"
               />
             </div>
@@ -129,7 +128,7 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
-                className="w-full px-4 py-2 border border-[#ad8881]/30 rounded-xl focus:ring-2 focus:ring-[#ffb4a7] focus:border-transparent bg-[#1c1b1b] text-white placeholder-white/40"
+                className="w-full px-4 py-2 border border-white/10 rounded-xl focus:ring-2 focus:ring-[#41ffaf]/40 focus:border-transparent bg-[#1c1b1b] text-white placeholder-white/40"
                 placeholder="••••••••"
               />
             </div>
@@ -137,15 +136,15 @@ export default function Login() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full px-4 py-3 bg-[#ff553c] text-white rounded-xl font-semibold label-font hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-4 py-3 bg-[#41ffaf] text-[#003822] rounded-xl font-semibold label-font hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? "Signing in..." : "Sign In"}
             </button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-[#e6bdb6]">
+          <p className="mt-6 text-center text-sm text-[#bacbbe]">
             Don&apos;t have an account?{" "}
-            <Link href="/auth/register" className="text-[#ffb4a7] hover:text-[#F63A22] font-semibold">
+            <Link href="/auth/register" className="text-[#41ffaf] hover:text-[#00e296] font-semibold">
               Sign up
             </Link>
           </p>

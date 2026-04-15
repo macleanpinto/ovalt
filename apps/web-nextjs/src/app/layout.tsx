@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { Inter, Space_Grotesk } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import { AlertProvider } from "@/lib/alert-context";
 import { GtmBody, GtmHead } from "@/components/gtm";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
-const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
 
 export const metadata: Metadata = {
   title: "Ovalt - Server-Side Tag Migration",
@@ -27,9 +27,11 @@ export default function RootLayout({
         <GtmHead />
         <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet" />
       </head>
-      <body className={`${inter.variable} ${spaceGrotesk.variable} ${inter.className}`}>
+      <body className={`${inter.variable} ${inter.className}`}>
         <GtmBody />
-        <AuthProvider>{children}</AuthProvider>
+        <AlertProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </AlertProvider>
       </body>
     </html>
   );

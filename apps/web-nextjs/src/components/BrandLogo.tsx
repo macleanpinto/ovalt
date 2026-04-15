@@ -19,7 +19,7 @@ export function BrandLogo({ priority, className }: BrandLogoProps) {
         className="h-8 w-8 shrink-0"
         fetchPriority={priority ? "high" : undefined}
       />
-      <span className="font-bold tracking-tight text-[1.375rem] leading-none text-white headline-font">
+      <span className="font-bold tracking-tight text-[1.375rem] leading-none text-[#41ffaf] headline-font">
         Ovalt
       </span>
     </span>

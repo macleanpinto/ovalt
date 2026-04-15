@@ -1,7 +1,12 @@
+'use client';
+
 import Link from "next/link";
 import { BrandLogo } from "@/components/BrandLogo";
+import { useAuth } from "@/lib/auth-context";
+import UserMenu from "@/components/UserMenu";
 
 export default function Home() {
+  const { user, isLoading } = useAuth();
   return (
     <div className="bg-[#131313] text-[#e5e2e1] min-h-screen">
       {/* TopNavBar */}
@@ -17,12 +22,20 @@ export default function Home() {
             <Link href="/dashboard" className="text-white/70 label-font hover:text-white transition-colors duration-300">Dashboard</Link>
           </div>
           <div className="flex items-center gap-6">
-            <Link href="/auth/login" className="text-white/70 text-sm label-font hover:text-white transition-colors duration-300">
-              Sign In
-            </Link>
-            <Link href="/auth/register" className="bg-[#41ffaf] text-[#003822] px-6 py-2.5 rounded-xl font-semibold label-font hover:opacity-90 transition-all">
-              Get Started
-            </Link>
+            {isLoading ? (
+              <div className="w-32 h-10 bg-[#353535] rounded-xl animate-pulse"></div>
+            ) : user ? (
+              <UserMenu />
+            ) : (
+              <>
+                <Link href="/auth/login" className="text-white/70 text-sm label-font hover:text-white transition-colors duration-300">
+                  Sign In
+                </Link>
+                <Link href="/auth/register" className="bg-[#41ffaf] text-[#003822] px-6 py-2.5 rounded-xl font-semibold label-font hover:opacity-90 transition-all">
+                  Get Started
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </nav>
@@ -55,6 +68,11 @@ export default function Home() {
             <div className="lg:col-span-5 relative">
               <div className="relative z-10 p-4 rounded-lg bg-[#20201f] border border-white/10 shadow-2xl">
                 <div className="aspect-square rounded overflow-hidden bg-[#1c1b1b] flex items-center justify-center relative group">
+                  <img
+                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuBSnBayGsfdU3_MYrvye1p_hEw2xiUFYImznqTMuq2D4PG-pobz8YsyAcdFL6tsBnHNnNzq1SLwX47m6ArCZCbuVXm-sDWSHOExj21S3Xoy0RksxAOHGsU_BLAkat7l_oxRfI0Uk5WyfhkXzLKnY25EJCQrwk1h9PgnZ_eG6j_LbhabAZNp9GqBroD68PDZyl0M-BUcBQ-rJVzuBD45H5Z9k-1wZPPVjmNQmyFZ0ibTmtj-PaUOyQLfJI-7GWKR_ZZZ2HJSnDl_5A"
+                    alt="Abstract server-side node network visualization with glowing light connections and technical architectural aesthetic"
+                    className="w-full h-full object-cover opacity-80 mix-blend-luminosity grayscale group-hover:grayscale-0 transition-all duration-700"
+                  />
                   <div className="absolute inset-0 bg-gradient-to-tr from-[#131313] to-[#41ffaf]/10 opacity-50"></div>
                   <div className="absolute bottom-6 left-6 right-6 p-6 bg-[#131313]/90 backdrop-blur-xl rounded-lg border border-white/5">
                     <div className="flex items-center justify-between mb-4">

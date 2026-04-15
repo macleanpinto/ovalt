@@ -5,36 +5,63 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
 import { apiClient, Run } from '@/lib/api-client';
+import { useAlert } from '@/lib/alert-context';
+import AppHeader from '@/components/AppHeader';
 
 export default function MigrationsPage() {
   const router = useRouter();
   const { organization } = useAuth();
+  const alert = useAlert();
   const [runs, setRuns] = useState<Run[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const loadRuns = async () => {
-      if (!organization) return;
+  const loadRuns = async () => {
+    if (!organization) return;
 
-      try {
-        setIsLoading(true);
-        const runsData = await apiClient.getRuns(organization.organizationId);
-        setRuns(runsData);
-      } catch (err: any) {
-        setError(err.message || 'Failed to load migrations');
-      } finally {
-        setIsLoading(false);
+    try {
+      setIsLoading(true);
+      const runsData = await apiClient.getRuns(organization.organizationId);
+      setRuns(runsData);
+    } catch (err: any) {
+      console.error('[Migrations] Failed to load runs:', err);
+      setError(err.message || 'Failed to load migrations');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRuns();
+  }, [organization]);
+
+  // Refresh when page becomes visible (e.g., navigating back from migration detail)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && organization) {
+        loadRuns();
       }
     };
 
-    loadRuns();
+    const handleFocus = () => {
+      if (organization) {
+        loadRuns();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [organization]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
-        return 'bg-green-500/10 text-green-400 border border-green-500/30';
+        return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
       case 'running':
       case 'queued':
         return 'bg-[#41ffaf]/10 text-[#41ffaf] border border-[#41ffaf]/30';
@@ -44,6 +71,23 @@ export default function MigrationsPage() {
         return 'bg-orange-500/10 text-orange-400 border border-orange-500/30';
       default:
         return 'bg-[#353535] text-[#bacbbe] border border-white/10';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return 'READY TO DEPLOY';
+      case 'running':
+        return 'ANALYZING';
+      case 'queued':
+        return 'QUEUED';
+      case 'failed':
+        return 'FAILED';
+      case 'needs_review':
+        return 'NEEDS REVIEW';
+      default:
+        return status.replace('_', ' ').toUpperCase();
     }
   };
 
@@ -63,22 +107,7 @@ export default function MigrationsPage() {
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
-        <header className="bg-[#1A1A1A]/80 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center w-full px-8 h-16 border-b border-white/5">
-          <div className="flex items-center gap-8">
-            <span className="text-xl font-bold tracking-tighter text-[#41ffaf]">Ovalt</span>
-            <nav className="hidden md:flex gap-6 items-center">
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/migrations">
-                All migrations
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/imports">
-                Imports
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
-                Dashboard
-              </Link>
-            </nav>
-          </div>
-        </header>
+        <AppHeader />
 
         <main className="p-8">
           <div className="max-w-7xl mx-auto">
@@ -87,15 +116,36 @@ export default function MigrationsPage() {
               <div>
                 <h1 className="text-3xl font-bold mb-2 text-white headline-font">Migrations</h1>
                 <p className="text-[#bacbbe]">
-                  View all migration runs for {organization?.name || 'your organization'}
+                  View all your migration runs
                 </p>
               </div>
-              <Link
-                href="/dashboard"
-                className="px-6 py-3 border border-white/10 text-white rounded-xl hover:bg-white/5 transition-colors label-font"
-              >
-                Back to Dashboard
-              </Link>
+              <div className="flex gap-3">
+                {runs.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Delete all ${runs.length} migration(s)?\n\nThis cannot be undone.`)) {
+                        return;
+                      }
+                      try {
+                        await Promise.all(runs.map(run => apiClient.deleteRun(run.runId)));
+                        setRuns([]);
+                        alert.success('All migrations deleted');
+                      } catch (err: any) {
+                        alert.error(`Failed to delete some migrations: ${err.message}`);
+                      }
+                    }}
+                    className="px-6 py-3 bg-red-500/10 text-red-400 rounded-xl hover:bg-red-500/20 transition-colors label-font border border-red-500/30"
+                  >
+                    Delete All
+                  </button>
+                )}
+                <Link
+                  href="/dashboard"
+                  className="px-6 py-3 border border-white/10 text-white rounded-xl hover:bg-white/5 transition-colors label-font"
+                >
+                  Back to Dashboard
+                </Link>
+              </div>
             </div>
 
           {isLoading ? (
@@ -167,7 +217,7 @@ export default function MigrationsPage() {
                     </div>
                     <div className="col-span-2">
                       <span className={`inline-block px-3 py-1 rounded-xl text-xs font-semibold label-font ${getStatusColor(run.status)}`}>
-                        {run.status.replace('_', ' ').toUpperCase()}
+                        {getStatusLabel(run.status)}
                       </span>
                     </div>
                     <div className="col-span-2 text-right">
@@ -191,8 +241,9 @@ export default function MigrationsPage() {
                           try {
                             await apiClient.deleteRun(run.runId);
                             setRuns(runs.filter(r => r.runId !== run.runId));
+                            alert.success('Migration deleted');
                           } catch (err: any) {
-                            alert(`Failed to delete: ${err.message}`);
+                            alert.error(`Failed to delete: ${err.message}`);
                           }
                         }}
                         className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg text-xs font-bold hover:bg-red-500/20 transition-all border border-red-500/30"

@@ -4,37 +4,64 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuth, ProtectedRoute } from "@/lib/auth-context";
 import { apiClient, Import, Stats, Run } from "@/lib/api-client";
+import { useAlert } from "@/lib/alert-context";
+import AppHeader from "@/components/AppHeader";
 
 export default function Dashboard() {
   const { organization, user } = useAuth();
+  const alert = useAlert();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recentRuns, setRecentRuns] = useState<Run[]>([]);
   const [recentImports, setRecentImports] = useState<Import[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const loadData = async () => {
-      if (!organization) return;
+  const loadData = async () => {
+    if (!organization) return;
 
-      try {
-        setIsLoading(true);
-        const [statsData, runsData, importsData] = await Promise.all([
-          apiClient.getStats(organization.organizationId),
-          apiClient.getRuns(organization.organizationId),
-          apiClient.getImports(organization.organizationId),
-        ]);
-        setStats(statsData);
-        setRecentRuns(runsData.slice(-3).reverse()); // Last 3 runs, most recent first
-        setRecentImports(importsData.slice(0, 5));
-      } catch (err: any) {
-        setError(err.message || 'Failed to load dashboard data');
-      } finally {
-        setIsLoading(false);
+    try {
+      setIsLoading(true);
+      const [statsData, runsData, importsData] = await Promise.all([
+        apiClient.getStats(organization.organizationId),
+        apiClient.getRuns(organization.organizationId),
+        apiClient.getImports(organization.organizationId),
+      ]);
+      setStats(statsData);
+      setRecentRuns(runsData.slice(-3).reverse()); // Last 3 runs, most recent first
+      setRecentImports(importsData.slice(0, 5));
+    } catch (err: any) {
+      console.error('[Dashboard] Failed to load data:', err);
+      setError(err.message || 'Failed to load dashboard data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [organization]);
+
+  // Refresh when page becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && organization) {
+        loadData();
       }
     };
 
-    loadData();
+    const handleFocus = () => {
+      if (organization) {
+        loadData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [organization]);
 
   if (isLoading) {
@@ -72,7 +99,7 @@ export default function Dashboard() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
-        return 'bg-green-500/10 text-green-400 border border-green-500/30';
+        return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
       case 'running':
       case 'queued':
         return 'bg-[#41ffaf]/10 text-[#41ffaf] border border-[#41ffaf]/30';
@@ -82,6 +109,23 @@ export default function Dashboard() {
         return 'bg-orange-500/10 text-orange-400 border border-orange-500/30';
       default:
         return 'bg-[#353535] text-[#bacbbe] border border-white/10';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return 'Ready to Deploy';
+      case 'running':
+        return 'Analyzing';
+      case 'queued':
+        return 'Queued';
+      case 'failed':
+        return 'Failed';
+      case 'needs_review':
+        return 'Needs Review';
+      default:
+        return status.replace('_', ' ');
     }
   };
 
@@ -101,22 +145,7 @@ export default function Dashboard() {
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
-        <header className="bg-[#1A1A1A]/80 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center w-full px-8 h-16 border-b border-white/5">
-          <div className="flex items-center gap-8">
-            <span className="text-xl font-bold tracking-tighter text-[#41ffaf]">Ovalt</span>
-            <nav className="hidden md:flex gap-6 items-center">
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
-                Dashboard
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/imports">
-                Imports
-              </Link>
-              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/migrations">
-                All migrations
-              </Link>
-            </nav>
-          </div>
-        </header>
+        <AppHeader />
 
         <main className="p-8">
           <div className="max-w-7xl mx-auto">
@@ -124,7 +153,7 @@ export default function Dashboard() {
             <div className="mb-8">
               <h1 className="text-3xl font-bold mb-2 text-white headline-font">Dashboard</h1>
               <p className="text-[#bacbbe]">
-                {organization?.name || 'Your'} tag migrations
+                Your tag migrations
               </p>
             </div>
 
@@ -205,7 +234,7 @@ export default function Dashboard() {
                               window.location.href = `/migrations/${run.runId}`;
                             } catch (err: any) {
                               console.error('Failed to create migration:', err);
-                              alert(`Failed to create migration: ${err.message}\n\nStatus: ${err.status || 'unknown'}\n\nCheck console for details.`);
+                              alert.error(`Failed to create migration: ${err.message}`);
                             }
                           }}
                           className="px-4 py-2 bg-[#41ffaf] text-[#003822] rounded-lg text-sm font-semibold label-font hover:opacity-90 transition-all"
@@ -239,7 +268,7 @@ export default function Dashboard() {
                       </p>
                     </div>
                     <span className={`px-3 py-1 rounded-xl text-sm label-font ${getStatusColor(run.status)}`}>
-                      {run.status.replace('_', ' ')}
+                      {getStatusLabel(run.status)}
                     </span>
                   </Link>
                 ))}
@@ -251,7 +280,6 @@ export default function Dashboard() {
           {/* User Info */}
           <div className="mt-8 text-center text-sm text-[#bacbbe]/60">
             <p>👤 Logged in as {user?.email}</p>
-            <p className="mt-1">🏢 Organization: {organization?.name || 'Loading...'}</p>
           </div>
           </div>
         </main>

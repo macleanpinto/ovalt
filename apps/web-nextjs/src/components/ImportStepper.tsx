@@ -32,13 +32,13 @@ export default function ImportStepper({ currentStep }: ImportStepperProps) {
               <div className={`flex items-center gap-4 group ${step.status === 'upcoming' ? 'opacity-40' : ''}`}>
                 {/* Step Circle */}
                 {step.status === 'completed' ? (
-                  <div className="w-10 h-10 rounded-full border border-secondary text-secondary flex items-center justify-center font-label font-bold bg-secondary/10">
+                  <div className="w-10 h-10 rounded-full border border-[#41ffaf] text-[#41ffaf] flex items-center justify-center font-label font-bold bg-[#41ffaf]/10">
                     <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                     </svg>
                   </div>
                 ) : step.status === 'active' ? (
-                  <div className="w-10 h-10 rounded-full border-2 border-[#ff553c] text-[#ff553c] flex items-center justify-center font-label font-bold">
+                  <div className="w-10 h-10 rounded-full border-2 border-[#41ffaf] text-[#41ffaf] flex items-center justify-center font-label font-bold">
                     {step.number.toString().padStart(2, '0')}
                   </div>
                 ) : (
@@ -50,8 +50,8 @@ export default function ImportStepper({ currentStep }: ImportStepperProps) {
                 {/* Step Label */}
                 <div className="flex flex-col">
                   <span className={`font-label text-xs uppercase tracking-widest ${
-                    step.status === 'completed' ? 'text-secondary' :
-                    step.status === 'active' ? 'text-[#ff553c]' :
+                    step.status === 'completed' ? 'text-[#41ffaf]' :
+                    step.status === 'active' ? 'text-[#41ffaf]' :
                     'text-white'
                   }`}>
                     {step.status === 'completed' ? 'Completed' : step.status === 'active' ? 'Active' : 'Upcoming'}
@@ -66,7 +66,7 @@ export default function ImportStepper({ currentStep }: ImportStepperProps) {
 
         {/* System Note */}
         <div className="p-6 rounded-lg bg-surface-container-low border border-outline-variant/10">
-          <h4 className="font-label text-xs uppercase tracking-widest text-[#ff553c] mb-3">System Note</h4>
+          <h4 className="font-label text-xs uppercase tracking-widest text-[#41ffaf] mb-3">System Note</h4>
           <p className="text-sm text-on-surface-variant leading-relaxed">
             Ensure you have admin permissions on the Google Account to view and import GTM containers.
           </p>
