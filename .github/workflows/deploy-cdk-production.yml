@@ -44,13 +44,13 @@ jobs:
         working-directory: apps/api
         run: |
           npm ci
-          npm run build
+          npm run build:lambda
 
       - name: Build Worker
         working-directory: apps/worker
         run: |
           npm ci
-          npm run build
+          npm run build:lambda
 
       - name: Build Next.js SSR
         working-directory: apps/web-nextjs
