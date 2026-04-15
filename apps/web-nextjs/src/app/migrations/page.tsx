@@ -34,16 +34,16 @@ export default function MigrationsPage() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'completed':
-        return 'bg-[#15a65e]/20 text-[#7dfba9] border border-[#5fde8f]/30';
+        return 'bg-green-500/10 text-green-400 border border-green-500/30';
       case 'running':
       case 'queued':
-        return 'bg-[#ffb4a7]/20 text-[#ffb4a7] border border-[#ffb4a7]/30';
+        return 'bg-[#41ffaf]/10 text-[#41ffaf] border border-[#41ffaf]/30';
       case 'failed':
-        return 'bg-[#93000a]/20 text-[#ffb4ab] border border-[#ffb4ab]/30';
+        return 'bg-red-500/10 text-red-400 border border-red-500/30';
       case 'needs_review':
-        return 'bg-[#ff553c]/20 text-[#ffdad4] border border-[#ff553c]/30';
+        return 'bg-orange-500/10 text-orange-400 border border-orange-500/30';
       default:
-        return 'bg-[#353535] text-[#c6c6c7] border border-[#5d3f3a]';
+        return 'bg-[#353535] text-[#bacbbe] border border-white/10';
     }
   };
 
@@ -62,58 +62,76 @@ export default function MigrationsPage() {
 
   return (
     <ProtectedRoute>
-      <main className="min-h-screen p-8 bg-[#131313]">
-        <div className="max-w-7xl mx-auto">
-          {/* Header */}
-          <div className="mb-8 flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold mb-2 text-white headline-font">Migrations</h1>
-              <p className="text-[#e6bdb6]">
-                View all migration runs for {organization?.name || 'your organization'}
-              </p>
-            </div>
-            <Link
-              href="/dashboard"
-              className="px-6 py-3 border border-[#ad8881]/30 text-white rounded-xl hover:bg-[#2a2a2a] transition-colors label-font"
-            >
-              Back to Dashboard
-            </Link>
+      <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
+        <header className="bg-[#1A1A1A]/80 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center w-full px-8 h-16 border-b border-white/5">
+          <div className="flex items-center gap-8">
+            <span className="text-xl font-bold tracking-tighter text-[#41ffaf]">Ovalt</span>
+            <nav className="hidden md:flex gap-6 items-center">
+              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/migrations">
+                All migrations
+              </Link>
+              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/imports">
+                Imports
+              </Link>
+              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
+                Dashboard
+              </Link>
+            </nav>
           </div>
+        </header>
+
+        <main className="p-8">
+          <div className="max-w-7xl mx-auto">
+            {/* Page Header */}
+            <div className="mb-8 flex items-center justify-between">
+              <div>
+                <h1 className="text-3xl font-bold mb-2 text-white headline-font">Migrations</h1>
+                <p className="text-[#bacbbe]">
+                  View all migration runs for {organization?.name || 'your organization'}
+                </p>
+              </div>
+              <Link
+                href="/dashboard"
+                className="px-6 py-3 border border-white/10 text-white rounded-xl hover:bg-white/5 transition-colors label-font"
+              >
+                Back to Dashboard
+              </Link>
+            </div>
 
           {isLoading ? (
             <div className="flex items-center justify-center min-h-[400px]">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#ffb4a7] mx-auto"></div>
-                <p className="mt-4 text-[#e6bdb6]">Loading migrations...</p>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#41ffaf] mx-auto"></div>
+                <p className="mt-4 text-[#bacbbe]">Loading migrations...</p>
               </div>
             </div>
           ) : error ? (
-            <div className="p-6 bg-[#93000a]/20 border border-[#ffb4ab]/20 rounded-xl">
-              <h2 className="text-lg font-semibold text-[#ffb4ab] mb-2 headline-font">
+            <div className="p-6 bg-red-500/10 border border-red-500/30 rounded-xl">
+              <h2 className="text-lg font-semibold text-red-400 mb-2 headline-font">
                 Failed to load migrations
               </h2>
-              <p className="text-[#ffb4ab]">{error}</p>
+              <p className="text-red-400">{error}</p>
             </div>
           ) : runs.length === 0 ? (
-            <div className="bg-[#20201f] border border-[#5d3f3a]/15 rounded-xl p-12 text-center">
+            <div className="bg-[#20201f] border border-white/10 rounded-xl p-12 text-center">
               <svg className="w-16 h-16 text-white/20 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
               <h3 className="text-xl font-bold text-white mb-2 headline-font">No Migrations Yet</h3>
-              <p className="text-[#e6bdb6] mb-6">
+              <p className="text-[#bacbbe] mb-6">
                 Import a GTM container first, then create a migration run.
               </p>
               <Link
                 href="/import"
-                className="inline-block px-6 py-3 bg-[#ff553c] text-white rounded-xl font-semibold label-font hover:brightness-110 transition-all"
+                className="inline-block px-6 py-3 bg-[#41ffaf] text-[#003822] rounded-xl font-semibold label-font hover:opacity-90 transition-all"
               >
                 Import Container
               </Link>
             </div>
           ) : (
-            <div className="bg-[#20201f] border border-[#5d3f3a]/15 rounded-xl shadow-lg overflow-hidden">
+            <div className="bg-[#20201f] border border-white/10 rounded-xl shadow-lg overflow-hidden">
               {/* Table Header */}
-              <div className="grid grid-cols-12 bg-[#353535]/50 px-6 py-4 border-b border-[#5d3f3a]/15">
+              <div className="grid grid-cols-12 bg-[#353535]/50 px-6 py-4 border-b border-white/10">
                 <div className="col-span-3 font-label text-xs uppercase tracking-widest text-white/50">
                   Run ID
                 </div>
@@ -135,14 +153,14 @@ export default function MigrationsPage() {
               </div>
 
               {/* Table Rows */}
-              <div className="divide-y divide-[#5d3f3a]/15">
+              <div className="divide-y divide-white/5">
                 {runs.map((run) => (
                   <div
                     key={run.runId}
                     className="grid grid-cols-12 px-6 py-5 hover:bg-[#2a2a2a] transition-colors items-center"
                   >
                     <Link href={`/migrations/${run.runId}`} className="col-span-3">
-                      <code className="text-sm text-white font-mono hover:text-[#ffb4a7]">{run.runId.slice(0, 12)}...</code>
+                      <code className="text-sm text-white font-mono hover:text-[#41ffaf]">{run.runId.slice(0, 12)}...</code>
                     </Link>
                     <div className="col-span-3">
                       <code className="text-sm text-white/60 font-mono">{run.importId?.slice(0, 12)}...</code>
@@ -159,7 +177,7 @@ export default function MigrationsPage() {
                         <span className="text-white/40">—</span>
                       )}
                     </div>
-                    <div className="col-span-1 text-right text-[#e6bdb6] text-sm">
+                    <div className="col-span-1 text-right text-[#bacbbe] text-sm">
                       {formatRelativeTime(run.createdAt)}
                     </div>
                     <div className="col-span-1 text-right">
@@ -177,7 +195,7 @@ export default function MigrationsPage() {
                             alert(`Failed to delete: ${err.message}`);
                           }
                         }}
-                        className="px-3 py-1.5 bg-[#93000a]/20 text-[#ffb4ab] rounded-lg text-xs font-bold hover:bg-[#93000a]/40 transition-all"
+                        className="px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg text-xs font-bold hover:bg-red-500/20 transition-all border border-red-500/30"
                       >
                         Delete
                       </button>
@@ -187,8 +205,9 @@ export default function MigrationsPage() {
               </div>
             </div>
           )}
-        </div>
-      </main>
+          </div>
+        </main>
+      </div>
     </ProtectedRoute>
   );
 }

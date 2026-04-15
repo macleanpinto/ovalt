@@ -20,7 +20,7 @@ import {
 
 // Repo-root `.env` is loaded from `index.ts` (local dev only). Lambda uses env + Secrets Manager (see lambda-handler.ts).
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, DeleteCommand, GetCommand, PutCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, DeleteCommand, GetCommand, PutCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { CreateBucketCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { hostingGuideFor, normalizeHostingProvider, type HostingProvider } from "./serverHosting.js";
@@ -43,6 +43,7 @@ import {
 
 // Env schema - will be parsed inside buildApp() after secrets are loaded
 const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(3001),
   AWS_REGION: z.string().default("us-east-1"),
   AWS_ENDPOINT: z.string().optional(),
@@ -349,20 +350,27 @@ app.addHook(
 
 // Authentication middleware - handles Bearer tokens, API keys, and service tokens
 app.addHook("onRequest", async (req, reply) => {
+  const publicPaths = [
+    "/health",
+    "/metrics",
+    "/gtm/oauth/callback",
+    "/gtm/debug/tags",
+    "/auth/register",
+    "/auth/login",
+    "/auth/oauth/google",
+    "/auth/oauth/github",
+    "/auth/oauth/google/callback",
+    "/auth/oauth/github/callback"
+  ];
+
+  // Add test endpoints in development/test mode
+  if (env.NODE_ENV === 'development' || env.NODE_ENV === 'test') {
+    publicPaths.push("/test/gtm-session", "/test/organization");
+  }
+
   await authenticateRequest(req, reply, {
     authService,
-    publicPaths: [
-      "/health",
-      "/metrics",
-      "/gtm/oauth/callback",
-      "/gtm/debug/tags",
-      "/auth/register",
-      "/auth/login",
-      "/auth/oauth/google",
-      "/auth/oauth/github",
-      "/auth/oauth/google/callback",
-      "/auth/oauth/github/callback"
-    ]
+    publicPaths
   });
 });
 
@@ -432,6 +440,72 @@ app.get("/gtm/oauth/callback", async (req, reply) => {
   const separator = redirectPath.includes('?') ? '&' : '?';
   return reply.redirect(`${env.WEB_BASE_URL}${redirectPath}${separator}gtmSession=${encodeURIComponent(state)}`);
 });
+
+// TEST ENDPOINT: Inject OAuth tokens for automated testing (development only)
+if (env.NODE_ENV === 'development' || env.NODE_ENV === 'test') {
+  app.post("/test/gtm-session", async (req, reply) => {
+    if (!requireGtmOAuthConfigured(reply)) return;
+
+    const { accessToken, refreshToken, expiryDate } = req.body as {
+      accessToken?: string;
+      refreshToken?: string;
+      expiryDate?: number;
+    };
+
+    if (!accessToken) {
+      return reply.code(400).send({ message: "accessToken required" });
+    }
+
+    const sessionId = 'test-session-' + Date.now();
+
+    gtmSessions.set(sessionId, {
+      tokens: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expiry_date: expiryDate
+      },
+      createdAt: Date.now(),
+      returnUrl: '/'
+    });
+
+    app.log.info({ sessionId }, "Created test GTM session");
+
+    return { sessionId };
+  });
+
+  // TEST ENDPOINT: Create test organization in database (development only)
+  app.post("/test/organization", async (req, reply) => {
+    const { organizationId, name } = req.body as {
+      organizationId?: string;
+      name?: string;
+    };
+
+    const orgId = organizationId || 'test-org-' + Date.now();
+    const orgName = name || 'E2E Test Organization';
+
+    try {
+      await ddbDoc.send(
+        new PutCommand({
+          TableName: env.DDB_TABLE_ORGANIZATIONS,
+          Item: {
+            organizationId: orgId,
+            name: orgName,
+            slug: orgId,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        })
+      );
+
+      app.log.info({ organizationId: orgId }, "Created test organization");
+
+      return { organizationId: orgId, name: orgName };
+    } catch (err) {
+      app.log.error({ err, organizationId: orgId }, "Failed to create test organization");
+      return reply.code(500).send({ message: "Failed to create organization" });
+    }
+  });
+}
 
 app.get("/gtm/accounts", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
@@ -1266,6 +1340,168 @@ app.get("/gtm/debug/tags", async (req, reply) => {
   }
 });
 
+app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
+  if (!requireGtmOAuthConfigured(reply)) return;
+  const sessionId = getGtmSessionId(req);
+  if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
+  const auth = getOAuthClientForSession(sessionId);
+  if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
+
+  const runId = (req.params as { runId: string }).runId;
+  const {
+    approvedTagIds,
+    clientContainerPath,
+    clientWorkspacePath,
+    serverContainerPath,
+    server_container_url
+  } = req.body as {
+    approvedTagIds: string[];
+    clientContainerPath: string;
+    clientWorkspacePath: string;
+    serverContainerPath: string;
+    server_container_url: string;
+  };
+
+  // Validate required fields
+  if (!approvedTagIds || !Array.isArray(approvedTagIds) || approvedTagIds.length === 0) {
+    return reply.code(400).send({ message: "approvedTagIds array required" });
+  }
+
+  if (!clientContainerPath || typeof clientContainerPath !== "string") {
+    return reply.code(400).send({ message: "clientContainerPath required (e.g., accounts/123/containers/456)" });
+  }
+
+  if (!clientWorkspacePath || typeof clientWorkspacePath !== "string") {
+    return reply.code(400).send({ message: "clientWorkspacePath required (e.g., accounts/123/containers/456/workspaces/7)" });
+  }
+
+  if (!serverContainerPath || typeof serverContainerPath !== "string") {
+    return reply.code(400).send({ message: "serverContainerPath required" });
+  }
+
+  if (!server_container_url || typeof server_container_url !== "string") {
+    return reply.code(400).send({ message: "server_container_url required (e.g. https://your-sgtm.example.com)" });
+  }
+
+  // Get the migration report
+  const raw = await s3ReadObjectText(`runs/${runId}/report.json`);
+  if (!raw) {
+    return reply.code(404).send({ message: "Migration report not found" });
+  }
+
+  const report = JSON.parse(raw) as any;
+
+  // Get approved tags from report
+  const containerTagsMap = new Map();
+  if (report.containerElements?.tags) {
+    for (const tag of report.containerElements.tags) {
+      containerTagsMap.set(tag.tagId, tag);
+    }
+  }
+
+  const approvedTags = approvedTagIds
+    .map(id => containerTagsMap.get(id))
+    .filter(Boolean);
+
+  if (approvedTags.length === 0) {
+    return reply.code(400).send({ message: "No valid tags found for approved IDs" });
+  }
+
+  // Group tags by category for consolidation
+  function getTagCategory(tagType: string): string | null {
+    if (['gaawe', 'googtag', 'gaawc'].includes(tagType)) return 'ga4';
+    if (['awct', 'sp'].includes(tagType)) return 'googads';
+    return null;
+  }
+
+  const tagsByCategory = new Map<string, any[]>();
+  for (const tag of approvedTags) {
+    const category = getTagCategory(tag.type);
+    if (category) {
+      if (!tagsByCategory.has(category)) {
+        tagsByCategory.set(category, []);
+      }
+      tagsByCategory.get(category)!.push(tag);
+    }
+  }
+
+  app.log.info({
+    approvedCount: approvedTags.length,
+    categories: Array.from(tagsByCategory.keys())
+  }, 'Deploying migration');
+
+  try {
+    const { deployMigrationWithExportImport } = await import('./gtm-migration-deploy.js');
+
+    const result = await deployMigrationWithExportImport(
+      auth,
+      {
+        clientContainerPath,
+        clientWorkspacePath,
+        serverContainerPath,
+        serverContainerUrl: server_container_url,
+        approvedTagIds,
+        tagsByType: tagsByCategory
+      },
+      app.log
+    );
+
+    // Save deployment record to DynamoDB
+    await ddbDoc.send(
+      new UpdateCommand({
+        TableName: env.DDB_TABLE_RUNS,
+        Key: { runId },
+        UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp",
+        ExpressionAttributeValues: {
+          ":empty": [],
+          ":deployment": [{
+            timestamp: new Date().toISOString(),
+            deployed: result.serverTagsCreated.length,
+            tagsModified: result.tagsModified,
+            clientWorkspacePath: result.clientWorkspacePath,
+            serverWorkspacePath: result.serverWorkspacePath,
+            serverContainerUrl: server_container_url
+          }],
+          ":timestamp": new Date().toISOString()
+        }
+      })
+    );
+
+    return {
+      success: true,
+      clientWorkspace: {
+        path: result.clientWorkspacePath,
+        name: result.clientWorkspaceName,
+        tagsModified: result.tagsModified
+      },
+      serverWorkspace: {
+        path: result.serverWorkspacePath,
+        name: result.serverWorkspaceName,
+        tags: result.serverTagsCreated
+      },
+      nextSteps: [
+        `✅ Client container: ${result.tagsModified} tags modified with server routing`,
+        `   → Workspace: "${result.clientWorkspaceName}"`,
+        `   → URL: https://tagmanager.google.com/#${result.clientWorkspacePath}`,
+        '',
+        `✅ Server container: ${result.serverTagsCreated.length} consolidated tags created`,
+        `   → Workspace: "${result.serverWorkspaceName}"`,
+        `   → URL: https://tagmanager.google.com/#${result.serverWorkspacePath}`,
+        '',
+        '📋 Next Steps:',
+        '1. Review both workspaces in GTM',
+        '2. Test in Preview mode',
+        '3. Publish when ready'
+      ]
+    };
+  } catch (err) {
+    app.log.error({ err }, 'Deployment failed');
+    const message = err instanceof Error ? err.message : 'Deployment failed';
+    return reply.code(502).send({ message });
+  }
+});
+
+// Keep old endpoint for backwards compatibility
 app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
@@ -1274,9 +1510,10 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const runId = (req.params as { runId: string }).runId;
-  const { approvedTagIds, serverContainerPath, autoConfigureClient = true } = req.body as {
+  const { approvedTagIds, serverContainerPath, server_container_url, autoConfigureClient = true } = req.body as {
     approvedTagIds: string[];
     serverContainerPath: string;
+    server_container_url: string;
     autoConfigureClient?: boolean;
   };
 
@@ -1286,6 +1523,10 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
 
   if (!serverContainerPath || typeof serverContainerPath !== "string") {
     return reply.code(400).send({ message: "serverContainerPath required" });
+  }
+
+  if (!server_container_url || typeof server_container_url !== "string") {
+    return reply.code(400).send({ message: "server_container_url required (e.g. https://your-sgtm.example.com)" });
   }
 
   // Get the migration report
@@ -1353,42 +1594,280 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
 
   // Get or create workspace
   let workspacePath: string;
+  const WORKSPACE_NAME = "Tag Relay Migration";
+
   try {
+    // Always start with a clean workspace - delete any previous Tag Relay workspaces
     const workspaces = await gtmCall(app.log, "workspaces.list", () =>
       tm.accounts.containers.workspaces.list({
         parent: serverContainerPath
       })
     );
 
-    const defaultWorkspace = workspaces.data.workspace?.find((w: any) => w.name === "Default Workspace");
-    if (defaultWorkspace?.path) {
-      workspacePath = defaultWorkspace.path;
-    } else {
-      // Create a new workspace
-      const created = await gtmCall(app.log, "workspaces.create", () =>
-        tm.accounts.containers.workspaces.create({
-          parent: serverContainerPath,
-          requestBody: {
-            name: `Tag Relay Migration ${new Date().toISOString().split('T')[0]}`
+    // Delete all existing Tag Relay workspaces to abandon unpublished changes
+    const tagRelayWorkspaces = workspaces.data.workspace?.filter((w: any) =>
+      w.name?.startsWith("Tag Relay")
+    ) || [];
+
+    if (tagRelayWorkspaces.length > 0) {
+      app.log.info({
+        count: tagRelayWorkspaces.length,
+        names: tagRelayWorkspaces.map((w: any) => w.name)
+      }, "Deleting existing Tag Relay workspaces to start fresh");
+
+      // Delete all old workspaces - MUST succeed before creating new one
+      for (const ws of tagRelayWorkspaces) {
+        if (ws.path) {
+          app.log.info({ workspacePath: ws.path, workspaceName: ws.name }, "Deleting workspace");
+
+          // Retry deletion up to 3 times if it fails
+          let deleteSuccess = false;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              await gtmCall(app.log, "workspaces.delete", () =>
+                tm.accounts.containers.workspaces.delete({
+                  path: ws.path!
+                })
+              );
+              app.log.info({ workspaceName: ws.name, attempt }, "Workspace deleted successfully");
+              deleteSuccess = true;
+              break;
+            } catch (deleteErr) {
+              if (attempt < 3) {
+                app.log.warn({
+                  err: deleteErr,
+                  workspaceName: ws.name,
+                  attempt
+                }, "Workspace deletion failed, retrying...");
+                // Wait 1 second before retry to let GTM API settle
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              } else {
+                app.log.error({
+                  err: deleteErr,
+                  workspaceName: ws.name
+                }, "Failed to delete workspace after 3 attempts");
+                // If deletion fails after retries, throw error
+                return reply.code(502).send({
+                  message: "Failed to delete existing workspace. Please manually delete the 'Tag Relay Migration' workspace in GTM and try again.",
+                  error: gtmErrorMessage(deleteErr),
+                  workspacePath: ws.path
+                });
+              }
+            }
           }
-        })
-      );
-      workspacePath = created.data.path!;
+        }
+      }
+
+      // Wait a moment after all deletions to let GTM API settle
+      app.log.info("Waiting for GTM API to settle after deletions...");
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    } else {
+      app.log.info("No existing Tag Relay workspaces found");
     }
+
+    // Create a fresh workspace for this deployment
+    app.log.info({ workspaceName: WORKSPACE_NAME }, "Creating new workspace");
+    const created = await gtmCall(app.log, "workspaces.create", () =>
+      tm.accounts.containers.workspaces.create({
+        parent: serverContainerPath,
+        requestBody: {
+          name: WORKSPACE_NAME,
+          description: "Automated server-side migration workspace created by Tag Relay"
+        }
+      })
+    );
+    workspacePath = created.data.path!;
+    app.log.info({ workspacePath, workspaceName: WORKSPACE_NAME }, "Created fresh workspace for deployment");
   } catch (err) {
-    app.log.error(err);
-    return reply.code(502).send({ message: "Failed to get or create workspace", error: gtmErrorMessage(err) });
+    app.log.error({ err }, "Failed to create workspace");
+    return reply.code(502).send({ message: "Failed to create clean workspace", error: gtmErrorMessage(err) });
   }
 
-  // Get all triggers in server workspace
-  let serverTriggers: any[] = [];
+  // Determine which client types are needed based on approved tags
+  const neededClients = new Set<string>();
+  const clientTagModifications: Array<{
+    clientTagId: string;
+    clientTagName: string;
+    clientType: string;
+    clientToCreate: string;
+  }> = [];
+
+  for (const mapping of approvedMappings) {
+    const rawClientTag = containerTagsMap.get(mapping.clientTagId);
+    if (!rawClientTag) continue;
+
+    const clientType = rawClientTag.type;
+    const serverType = mapClientTagTypeToServer(clientType);
+
+    // Check if this tag type needs client-side routing to server
+    // GA4 tags (all variants)
+    if (clientType === 'gaawe' || clientType === 'googtag' || clientType === 'gaawc' || serverType === 'sgtmgaaw') {
+      neededClients.add('ga4');
+      clientTagModifications.push({
+        clientTagId: mapping.clientTagId,
+        clientTagName: mapping.clientTagName,
+        clientType,
+        clientToCreate: 'ga4'
+      });
+    }
+    // Google Ads tags (conversion, remarketing)
+    else if (clientType === 'awct' || clientType === 'sp' || serverType === 'sgtmgads') {
+      neededClients.add('googads');
+      clientTagModifications.push({
+        clientTagId: mapping.clientTagId,
+        clientTagName: mapping.clientTagName,
+        clientType,
+        clientToCreate: 'googads'
+      });
+    }
+    // Floodlight tags
+    else if (clientType === 'fls' || clientType === 'flc' || serverType === 'sgtmflood') {
+      neededClients.add('floodlight');
+      clientTagModifications.push({
+        clientTagId: mapping.clientTagId,
+        clientTagName: mapping.clientTagName,
+        clientType,
+        clientToCreate: 'floodlight'
+      });
+    }
+  }
+
+  app.log.info({
+    neededClients: Array.from(neededClients),
+    tagsToModify: clientTagModifications.length,
+    tagTypes: approvedMappings.map((m: any) => {
+      const tag = containerTagsMap.get(m.clientTagId);
+      return tag ? `${tag.type} → ${mapClientTagTypeToServer(tag.type)}` : 'unknown';
+    })
+  }, "Determined client requirements for migration");
+
+  // Warn if no clients are needed (might indicate tags don't use client-side routing)
+  if (neededClients.size === 0) {
+    app.log.warn({
+      approvedTagCount: approvedMappings.length,
+      tagTypes: approvedMappings.map((m: any) => {
+        const tag = containerTagsMap.get(m.clientTagId);
+        return tag?.type;
+      })
+    }, "No clients needed - tags may not require client-side routing or use direct server integration");
+  }
+
+  // Create server-side triggers (without clients for simpler migration)
+  const serverClients: Array<{ name: string; clientId: string; triggerId: string }> = [];
+  const serverTriggers: any[] = []; // Store all created triggers for lookup
+
+  // For each needed client type, create an "All Events" trigger instead of a client
+  // This allows tags to fire on all incoming requests without complex client setup
+  for (const clientType of neededClients) {
+    try {
+      let triggerName: string;
+      let triggerNotes: string;
+
+      if (clientType === 'ga4') {
+        triggerName = 'All GA4 Events';
+        triggerNotes = 'Auto-created by Tag Relay. Fires on all incoming requests for GA4 tags. Client-side tags route events to server via server_container_url.';
+      } else if (clientType === 'googads') {
+        triggerName = 'All Google Ads Events';
+        triggerNotes = 'Auto-created by Tag Relay. Fires on all incoming requests for Google Ads tags.';
+      } else if (clientType === 'floodlight') {
+        triggerName = 'All Floodlight Events';
+        triggerNotes = 'Auto-created by Tag Relay. Fires on all incoming requests for Floodlight tags.';
+      } else {
+        app.log.warn({ clientType }, "Unknown client type - skipping trigger creation");
+        continue;
+      }
+
+      // Create a filtered trigger that only fires for the specific client type
+      // Server-side triggers use type 'always' with filter conditions
+      let triggerConfig: any = {
+        type: 'always',
+        name: triggerName,
+        notes: triggerNotes
+      };
+
+      if (clientType === 'ga4') {
+        // Filter for GA4 events: check if x-ga-measurement_id request header exists
+        // This header is present in all GA4 requests to server-side GTM
+        triggerConfig.filter = [
+          {
+            type: 'contains',
+            parameter: [
+              { type: 'template', key: 'arg0', value: '{{x-ga-measurement_id}}' },
+              { type: 'template', key: 'arg1', value: 'G-' }
+            ]
+          }
+        ];
+      } else if (clientType === 'googads') {
+        // Filter for Google Ads conversion events
+        triggerConfig.filter = [
+          {
+            type: 'matchRegex',
+            parameter: [
+              { type: 'template', key: 'arg0', value: '{{x-ga-gcs_origin}}' },
+              { type: 'template', key: 'arg1', value: 'ads' }
+            ]
+          }
+        ];
+      } else if (clientType === 'floodlight') {
+        // Filter for Floodlight events
+        triggerConfig.filter = [
+          {
+            type: 'contains',
+            parameter: [
+              { type: 'template', key: 'arg0', value: '{{Page Path}}' },
+              { type: 'template', key: 'arg1', value: 'fls' }
+            ]
+          }
+        ];
+      }
+
+      const triggerRes = await gtmCall(app.log, "triggers.create", () =>
+        tm.accounts.containers.workspaces.triggers.create({
+          parent: workspacePath,
+          requestBody: triggerConfig
+        })
+      );
+
+      const triggerId = triggerRes.data.triggerId;
+      app.log.info(
+        { triggerId, triggerName, clientType },
+        "✅ Created 'All Events' trigger for server tags"
+      );
+
+      // Store the full trigger for later lookup (important for tag attachment)
+      if (triggerRes.data) {
+        serverTriggers.push(triggerRes.data);
+      }
+
+      // Store in serverClients array for compatibility (even though we're not creating actual clients)
+      if (triggerId) {
+        serverClients.push({
+          name: triggerName,
+          clientId: '', // No client created
+          triggerId
+        });
+      }
+
+    } catch (err) {
+      app.log.error({ err, clientType }, "Failed to create trigger");
+      errors.push({
+        clientType,
+        error: `Failed to create trigger for ${clientType}: ${gtmErrorMessage(err)}`
+      });
+    }
+  }
+
+  // Get all triggers in server workspace and append to our created triggers array
   try {
     const triggersRes = await gtmCall(app.log, "triggers.list", () =>
       tm.accounts.containers.workspaces.triggers.list({
         parent: workspacePath
       })
     );
-    serverTriggers = triggersRes.data.trigger || [];
+    // Append API-loaded triggers to our array (avoiding duplicates by checking triggerId)
+    const existingIds = new Set(serverTriggers.map((t: any) => t.triggerId).filter(Boolean));
+    const newTriggers = (triggersRes.data.trigger || []).filter((t: any) => !existingIds.has(t.triggerId));
+    serverTriggers.push(...newTriggers);
   } catch (err) {
     app.log.warn("Failed to list triggers in server workspace");
   }
@@ -1436,7 +1915,8 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
 
         // Extract trigger IDs from filter conditions
         for (const filterCondition of clientTrigger.filter) {
-          if (filterCondition.type === 'EQUALS' && filterCondition.parameter) {
+          const condType = String(filterCondition.type || '').toLowerCase();
+          if (condType === 'equals' && filterCondition.parameter) {
             // Find the parameter with key 'arg0' which contains the child trigger ID
             const arg0 = filterCondition.parameter.find((p: any) => p.key === 'arg0');
             if (arg0?.value) {
@@ -1471,13 +1951,13 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
             name: clientTriggerName,
             type: 'customEvent',
             customEventFilter: [{
-              type: 'EQUALS',
+              type: 'equals',
               parameter: [{
-                type: 'TEMPLATE',
+                type: 'template',
                 key: 'arg0',
                 value: '{{_event}}'
               }, {
-                type: 'TEMPLATE',
+                type: 'template',
                 key: 'arg1',
                 value: customEventName
               }]
@@ -1596,96 +2076,155 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
 
   const templateResults: any[] = [];
 
-  // Deploy approved tags by mapping their types
+  /** One consolidated server tag per client GTM tag type (e.g. gaawe vs googtag each get their own server tag). */
+  const tagsByClientTagType = new Map<string, Array<{
+    mapping: any;
+    rawTag: any;
+    clientMod: any;
+  }>>();
+
   for (const mapping of approvedMappings) {
+    const rawClientTag = containerTagsMap.get(mapping.clientTagId);
+    if (!rawClientTag) {
+      errors.push({
+        clientTagId: mapping.clientTagId,
+        clientTagName: mapping.clientTagName,
+        error: 'Client tag not found in container data'
+      });
+      continue;
+    }
+
+    const serverType = mapClientTagTypeToServer(rawClientTag.type);
+    if (!serverType) {
+      errors.push({
+        clientTagId: mapping.clientTagId,
+        clientTagName: mapping.clientTagName,
+        error: `Tag type "${rawClientTag.type}" cannot be automatically migrated to server-side.`
+      });
+      continue;
+    }
+
+    const clientMod = clientTagModifications.find(m => m.clientTagId === mapping.clientTagId);
+    const clientTagType = rawClientTag.type;
+
+    if (!tagsByClientTagType.has(clientTagType)) {
+      tagsByClientTagType.set(clientTagType, []);
+    }
+    tagsByClientTagType.get(clientTagType)!.push({ mapping, rawTag: rawClientTag, clientMod });
+  }
+
+  app.log.info({
+    clientTagTypeCount: tagsByClientTagType.size,
+    clientTagTypes: Array.from(tagsByClientTagType.keys())
+  }, "Grouped tags by client tag type (one server tag per type)");
+
+  // Create ONE server tag per client tag type
+  for (const [clientTagType, tagsGroup] of tagsByClientTagType.entries()) {
+    const serverType = mapClientTagTypeToServer(clientTagType);
+    if (!serverType) {
+      for (const { mapping } of tagsGroup) {
+        errors.push({
+          clientTagId: mapping.clientTagId,
+          clientTagName: mapping.clientTagName,
+          error: `Tag type "${clientTagType}" has no server-side mapping`
+        });
+      }
+      continue;
+    }
+
     try {
-      // Get the original client-side tag to extract ALL properties
-      const rawClientTag = containerTagsMap.get(mapping.clientTagId);
+      // Use the first tag in the group as a template
+      const { mapping: firstMapping, rawTag: firstRawTag } = tagsGroup[0];
+      const groupClientMod = tagsGroup.map((t) => t.clientMod).find(Boolean) ?? null;
 
-      if (!rawClientTag) {
-        errors.push({
-          clientTagId: mapping.clientTagId,
-          clientTagName: mapping.clientTagName,
-          error: 'Client tag not found in container data'
-        });
-        app.log.warn({ clientTagId: mapping.clientTagId }, "Client tag not found");
-        continue;
-      }
+      // Determine a generic name for this consolidated tag
+      const typeLabel = serverType === 'sgtmgaaw' ? 'GA4 Events' :
+                        serverType === 'sgtmgads' ? 'Google Ads Conversions' :
+                        serverType === 'sgtmmeta' ? 'Meta Events' :
+                        `${serverType} Events`;
 
-      // DEBUG: Log client tag structure
+      const tagName = tagsGroup.length === 1
+        ? `${firstMapping.clientTagName} (Server)`
+        : `${typeLabel} [${clientTagType}] (${tagsGroup.length} tags)`;
+
       app.log.info({
-        tagName: mapping.clientTagName,
-        tagId: mapping.clientTagId,
-        clientType: rawClientTag.type,
-        parameterCount: rawClientTag.parameter?.length || 0
-      }, "Migrating client tag to server");
+        clientTagType,
+        serverType,
+        tagName,
+        clientTagCount: tagsGroup.length,
+        clientTagIds: tagsGroup.map(t => t.mapping.clientTagId)
+      }, "Creating consolidated server tag");
 
-      // Map client type to server type
-      const serverType = mapClientTagTypeToServer(rawClientTag.type);
-
-      if (!serverType) {
-        errors.push({
-          clientTagId: mapping.clientTagId,
-          clientTagName: mapping.clientTagName,
-          error: `Tag type "${rawClientTag.type}" cannot be automatically migrated to server-side. Manual configuration required.`
-        });
-        app.log.warn({ clientType: rawClientTag.type, tagName: mapping.clientTagName }, "No server-side equivalent for this tag type");
-        continue;
-      }
-
-      // Copy ALL parameters from client tag (generic approach)
+      // Copy ALL parameters from the first client tag (generic approach)
       const parameters: any[] = [];
-      if (rawClientTag.parameter && Array.isArray(rawClientTag.parameter)) {
-        for (const param of rawClientTag.parameter) {
-          parameters.push(param);
+      if (firstRawTag.parameter && Array.isArray(firstRawTag.parameter)) {
+        for (const param of firstRawTag.parameter) {
+          // IMPORTANT: For consolidated GA4 server tags with multiple events, SKIP the eventName parameter
+          // The server tag will automatically read event_name from the incoming GA4 request payload
+          // This preserves the original event name from each client-side tag (purchase, add_to_cart, etc.)
+          if (tagsGroup.length > 1 && param.key === 'eventName' && param.type === 'TEMPLATE' && serverType === 'sgtmgaaw') {
+            // Skip eventName parameter - let server tag read from request
+            app.log.info({
+              originalEventName: param.value,
+              consolidatedTagCount: tagsGroup.length,
+              serverType
+            }, "Skipped eventName parameter for consolidated GA4 server tag - will auto-read from client request");
+            continue; // Don't add this parameter
+          } else {
+            parameters.push(param);
+          }
         }
       }
 
-      // Build server tag config by copying properties from client tag
-      const recommendation = mapping.serverRecommendation || '';
+      // Build server tag config by copying properties from first client tag
+      const clientTagNames = tagsGroup.map(t => t.mapping.clientTagName).join(', ');
+      const isConsolidatedGA4 = tagsGroup.length > 1 && serverType === 'sgtmgaaw';
+      const eventNameNote = isConsolidatedGA4
+        ? 'Automatically reads event_name from incoming client requests to preserve original event names (purchase, add_to_cart, etc.).'
+        : '';
       const tagConfig: any = {
         type: serverType,
         parameter: parameters,
-        tagFiringOption: rawClientTag.tagFiringOption || 'ONCE_PER_EVENT',
-        notes: `Migrated from client-side tag: ${mapping.clientTagName}\n\n${recommendation}`
+        tagFiringOption: firstRawTag.tagFiringOption || 'ONCE_PER_EVENT',
+        notes: `Consolidated server tag (client tag type: ${clientTagType}) for ${tagsGroup.length} client-side tag(s): ${clientTagNames}. ${eventNameNote}`.trim()
       };
 
-      // Copy ALL optional properties from client tag (generic copy)
-      if (rawClientTag.consentSettings) {
-        tagConfig.consentSettings = rawClientTag.consentSettings;
-        app.log.info({ consentSettings: rawClientTag.consentSettings }, "Copied consent settings");
+      // Copy ALL optional properties from first client tag (generic copy)
+      if (firstRawTag.consentSettings) {
+        tagConfig.consentSettings = firstRawTag.consentSettings;
+        app.log.info({ consentSettings: firstRawTag.consentSettings }, "Copied consent settings");
       }
 
-      if (rawClientTag.monitoringMetadata) {
-        tagConfig.monitoringMetadata = rawClientTag.monitoringMetadata;
+      if (firstRawTag.monitoringMetadata) {
+        tagConfig.monitoringMetadata = firstRawTag.monitoringMetadata;
       }
 
-      if (rawClientTag.setupTag) {
-        tagConfig.setupTag = rawClientTag.setupTag;
+      if (firstRawTag.setupTag) {
+        tagConfig.setupTag = firstRawTag.setupTag;
       }
 
-      if (rawClientTag.teardownTag) {
-        tagConfig.teardownTag = rawClientTag.teardownTag;
+      if (firstRawTag.teardownTag) {
+        tagConfig.teardownTag = firstRawTag.teardownTag;
       }
 
-      if (rawClientTag.priority) {
-        tagConfig.priority = rawClientTag.priority;
+      if (firstRawTag.priority) {
+        tagConfig.priority = firstRawTag.priority;
       }
 
-      if (rawClientTag.liveOnly) {
-        tagConfig.liveOnly = rawClientTag.liveOnly;
+      if (firstRawTag.liveOnly) {
+        tagConfig.liveOnly = firstRawTag.liveOnly;
       }
 
-      if (rawClientTag.scheduleStartMs) {
-        tagConfig.scheduleStartMs = rawClientTag.scheduleStartMs;
+      if (firstRawTag.scheduleStartMs) {
+        tagConfig.scheduleStartMs = firstRawTag.scheduleStartMs;
       }
 
-      if (rawClientTag.scheduleEndMs) {
-        tagConfig.scheduleEndMs = rawClientTag.scheduleEndMs;
+      if (firstRawTag.scheduleEndMs) {
+        tagConfig.scheduleEndMs = firstRawTag.scheduleEndMs;
       }
 
       app.log.info({
-        clientType: rawClientTag.type,
+        clientType: firstRawTag.type,
         serverType,
         parametersCopied: parameters.length,
         hasConsent: !!tagConfig.consentSettings
@@ -1693,34 +2232,92 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
 
       // Create the tag
       const tagBody: any = {
-        name: `${mapping.clientTagName} (Server)`,
+        name: tagName,
         ...tagConfig
       };
 
-      // Get triggers from the original client-side tag
-      const detectedTag = detectedTagsMap.get(mapping.clientTagId);
-      if (detectedTag?.firingTriggerIds && detectedTag.firingTriggerIds.length > 0) {
-        app.log.info({ clientTagId: mapping.clientTagId, firingTriggerIds: detectedTag.firingTriggerIds }, "Processing triggers for tag");
+      // Determine which trigger to use on server
+      // For GA4/Ads/Floodlight with client-side routing, use the client-routing trigger (all events from that client)
+      if (groupClientMod) {
+        const client = serverClients.find(c =>
+          (groupClientMod.clientToCreate === 'ga4' && c.name === 'GA4') ||
+          (groupClientMod.clientToCreate === 'googads' && c.name === 'Google Ads') ||
+          (groupClientMod.clientToCreate === 'floodlight' && c.name === 'Floodlight')
+        );
 
-        const serverTriggerIds: string[] = [];
-        for (const clientTriggerId of detectedTag.firingTriggerIds) {
-          const clientTrigger = containerTriggersMap.get(clientTriggerId);
-          if (clientTrigger) {
-            const serverTriggerId = await getOrCreateServerTrigger(clientTrigger.name);
-            if (serverTriggerId) {
-              serverTriggerIds.push(serverTriggerId);
-            }
+        if (client?.triggerId) {
+          tagBody.firingTriggerId = [client.triggerId];
+          app.log.info({
+            clientType: groupClientMod.clientToCreate,
+            triggerName: client.name,
+            triggerId: client.triggerId
+          }, "Attached client-routing trigger to server tag");
+        } else {
+          app.log.warn({ clientMod: groupClientMod }, "Client routing trigger not found - tag may not fire");
+        }
+      } else {
+        // This tag doesn't use client routing → try to recreate behavioral triggers
+        // Collect all triggers from all tags in the group
+        const allTriggerIds = new Set<string>();
+        for (const { mapping } of tagsGroup) {
+          const detectedTag = detectedTagsMap.get(mapping.clientTagId);
+          if (detectedTag?.firingTriggerIds && detectedTag.firingTriggerIds.length > 0) {
+            detectedTag.firingTriggerIds.forEach((tid: string) => allTriggerIds.add(tid));
           }
         }
 
-        if (serverTriggerIds.length > 0) {
-          tagBody.firingTriggerId = serverTriggerIds;
-          app.log.info({ serverTriggerIds }, "Attached triggers to tag");
+        if (allTriggerIds.size > 0) {
+          app.log.info({
+            clientTagCount: tagsGroup.length,
+            firingTriggerIds: Array.from(allTriggerIds)
+          }, "Processing triggers for consolidated tag");
+
+          const serverTriggerIds: string[] = [];
+          for (const clientTriggerId of allTriggerIds) {
+            const clientTrigger = containerTriggersMap.get(clientTriggerId);
+            if (clientTrigger) {
+              const serverTriggerId = await getOrCreateServerTrigger(clientTrigger.name);
+              if (serverTriggerId) {
+                serverTriggerIds.push(serverTriggerId);
+              }
+            }
+          }
+
+          if (serverTriggerIds.length > 0) {
+            tagBody.firingTriggerId = serverTriggerIds;
+            app.log.info({ serverTriggerIds }, "Attached triggers to consolidated tag");
+          } else {
+            app.log.warn("No server triggers could be created/found for this tag");
+          }
         } else {
-          app.log.warn("No server triggers could be created/found for this tag");
+          app.log.info({ clientTagCount: tagsGroup.length }, "No triggers found for client tags in group");
         }
-      } else {
-        app.log.info({ clientTagId: mapping.clientTagId }, "No triggers found for original client tag");
+      }
+
+      // Fallback: attach by trigger name if API client list missed (e.g. partial failure) but triggers exist in workspace
+      if (!tagBody.firingTriggerId?.length && groupClientMod) {
+        const triggerNameByRouting: Record<string, string> = {
+          ga4: 'All GA4 Events',
+          googads: 'All Google Ads Events',
+          floodlight: 'All Floodlight Events'
+        };
+        const wantName = triggerNameByRouting[groupClientMod.clientToCreate];
+        if (wantName) {
+          const t = serverTriggers.find((x: any) => x.name === wantName && x.triggerId);
+          if (t?.triggerId) {
+            tagBody.firingTriggerId = [t.triggerId];
+            app.log.info({ triggerId: t.triggerId, wantName }, "✅ Attached All Events trigger by name (fallback)");
+          }
+        }
+      }
+
+      // Last resort: GA4 server tags should always fire on all GA4 events
+      if (!tagBody.firingTriggerId?.length && serverType === 'sgtmgaaw') {
+        const t = serverTriggers.find((x: any) => x.name === 'All GA4 Events' && x.triggerId);
+        if (t?.triggerId) {
+          tagBody.firingTriggerId = [t.triggerId];
+          app.log.info({ triggerId: t.triggerId }, "✅ Attached 'All GA4 Events' trigger for sgtmgaaw tag (last resort)");
+        }
       }
 
       const created = await gtmCall(app.log, "tags.create", () =>
@@ -1730,23 +2327,65 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
         })
       );
 
-      deployedTags.push({
-        clientTagId: mapping.clientTagId,
-        clientTagName: mapping.clientTagName,
-        serverTagId: created.data.tagId,
-        serverTagPath: created.data.path,
-        status: 'deployed',
-        needsConfiguration: true
-      });
+      // VALIDATION: Check if triggers were attached
+      if (!tagBody.firingTriggerId || tagBody.firingTriggerId.length === 0) {
+        app.log.error({
+          tagName: tagBody.name,
+          serverType,
+          hasClientRouting: !!groupClientMod,
+          serverClientsAvailable: serverClients.length,
+          serverTriggersAvailable: serverTriggers.length
+        }, "WARNING: Tag created WITHOUT triggers - it will not fire! Manual configuration required.");
 
-      app.log.info({ tagId: created.data.tagId }, `Deployed tag: ${mapping.clientTagName}`);
+        // Add to errors array so user sees this
+        errors.push({
+          clientTagId: tagsGroup[0].mapping.clientTagId,
+          clientTagName: tagsGroup[0].mapping.clientTagName,
+          error: `Tag "${tagBody.name}" was created but no triggers were attached. The tag will not fire. Please manually add triggers in GTM.`,
+          details: {
+            serverType,
+            expectedClientType: groupClientMod?.clientToCreate,
+            serverClientsCreated: serverClients.map(c => c.name),
+            serverTriggersCreated: serverTriggers.map((t: any) => t.name)
+          }
+        });
+      } else {
+        app.log.info({
+          tagName: tagBody.name,
+          triggerIds: tagBody.firingTriggerId,
+          triggerCount: tagBody.firingTriggerId.length
+        }, "✅ Tag created with triggers attached");
+      }
+
+      // Record deployment for ALL client tags in this group
+      const serverTagId = created.data.tagId;
+      const serverTagPath = created.data.path;
+      for (const { mapping } of tagsGroup) {
+        deployedTags.push({
+          clientTagId: mapping.clientTagId,
+          clientTagName: mapping.clientTagName,
+          serverTagId,
+          serverTagPath,
+          status: 'deployed',
+          needsConfiguration: true,
+          sharedServerTag: tagsGroup.length > 1 // Flag that this is a consolidated tag
+        });
+      }
+
+      app.log.info({
+        tagId: serverTagId,
+        clientTagCount: tagsGroup.length
+      }, `Deployed consolidated tag: ${tagName}`);
     } catch (err) {
-      app.log.error({ err, mapping: mapping.clientTagName }, "Failed to create tag");
-      errors.push({
-        clientTagId: mapping.clientTagId,
-        clientTagName: mapping.clientTagName,
-        error: gtmErrorMessage(err)
-      });
+      app.log.error({ err, clientTagType, serverType, clientTagCount: tagsGroup.length }, "Failed to create consolidated tag");
+      // Mark all tags in this group as failed
+      for (const { mapping } of tagsGroup) {
+        errors.push({
+          clientTagId: mapping.clientTagId,
+          clientTagName: mapping.clientTagName,
+          error: gtmErrorMessage(err)
+        });
+      }
     }
   }
 
@@ -1759,14 +2398,42 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
     }, "Deploying proxy tags to client container");
 
     try {
-      // Get or use the client workspace
-      let clientWorkspace = clientWorkspacePath;
-      if (!clientWorkspace) {
-        const workspaces = await gtmCall(app.log, "workspaces.list", () =>
-          tm.accounts.containers.workspaces.list({ parent: clientContainerPath })
-        );
-        const defaultWs = workspaces.data.workspace?.find((w: any) => w.name === "Default Workspace");
-        clientWorkspace = defaultWs?.path || null;
+      // ALWAYS dynamically resolve workspace - GTM may delete/recreate workspaces after publish
+      let clientWorkspace: string | null = null;
+
+      const workspacesRes = await gtmCall(app.log, "workspaces.list", () =>
+        tm.accounts.containers.workspaces.list({ parent: clientContainerPath })
+      );
+
+      const workspaces = workspacesRes.data.workspace || [];
+
+      if (workspaces.length === 0) {
+        // No workspace exists - create one
+        app.log.info("No workspace found in client container - creating one for proxy tags");
+
+        try {
+          const newWorkspace = await gtmCall(app.log, "workspaces.create", () =>
+            tm.accounts.containers.workspaces.create({
+              parent: clientContainerPath,
+              requestBody: {
+                name: 'Tag Relay Client Updates',
+                description: 'Workspace created by Tag Relay for routing client tags to server-side GTM container'
+              }
+            })
+          );
+
+          clientWorkspace = newWorkspace.data.path || null;
+          app.log.info({ workspacePath: clientWorkspace }, "Created new client workspace for proxy tags");
+        } catch (createErr) {
+          app.log.error({ err: createErr }, "Failed to create client workspace for proxy tags");
+        }
+      } else {
+        // Use the first available workspace
+        clientWorkspace = workspaces[0].path || null;
+        app.log.info({
+          workspacePath: clientWorkspace,
+          workspaceName: workspaces[0].name
+        }, "Using existing client workspace for proxy tags");
       }
 
       if (!clientWorkspace) {
@@ -1821,22 +2488,223 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
     }
   }
 
+  // Modify client-side tags to route to server container
+  const modifiedClientTags: any[] = [];
+  if (autoConfigureClient && clientContainerPath && clientTagModifications.length > 0) {
+    app.log.info({
+      clientContainerPath,
+      tagsToModify: clientTagModifications.length
+    }, "Modifying client-side tags to route to server");
+
+    try {
+      // ALWAYS dynamically resolve workspace - GTM may delete/recreate workspaces after publish
+      let clientWorkspace: string | null = null;
+
+      const workspacesRes = await gtmCall(app.log, "workspaces.list", () =>
+        tm.accounts.containers.workspaces.list({ parent: clientContainerPath })
+      );
+
+      const workspaces = workspacesRes.data.workspace || [];
+
+      if (workspaces.length === 0) {
+        // No workspace exists - create one called "Tag Relay Client Updates"
+        app.log.info("No workspace found in client container - creating one for tag modifications");
+
+        try {
+          const newWorkspace = await gtmCall(app.log, "workspaces.create", () =>
+            tm.accounts.containers.workspaces.create({
+              parent: clientContainerPath,
+              requestBody: {
+                name: 'Tag Relay Client Updates',
+                description: 'Workspace created by Tag Relay for routing client tags to server-side GTM container'
+              }
+            })
+          );
+
+          clientWorkspace = newWorkspace.data.path || null;
+          app.log.info({ workspacePath: clientWorkspace, workspaceName: 'Tag Relay Client Updates' }, "Created new client workspace");
+        } catch (createErr) {
+          app.log.error({ err: createErr }, "Failed to create client workspace");
+        }
+      } else {
+        // Use the first available workspace (GTM's "current" workspace)
+        clientWorkspace = workspaces[0].path || null;
+        app.log.info({
+          workspacePath: clientWorkspace,
+          workspaceName: workspaces[0].name,
+          totalWorkspaces: workspaces.length
+        }, "Using existing client workspace");
+      }
+
+      if (!clientWorkspace) {
+        app.log.warn("No workspace available in client container - skipping client tag modifications");
+      } else {
+        // Get all tags in client workspace
+        const clientTagsRes = await gtmCall(app.log, "tags.list", () =>
+          tm.accounts.containers.workspaces.tags.list({
+            parent: clientWorkspace!
+          })
+        );
+
+        const clientTagsById = new Map<string, any>();
+        for (const tag of clientTagsRes.data.tag || []) {
+          if (tag.tagId) {
+            clientTagsById.set(tag.tagId, tag);
+          }
+        }
+
+        // Modify each tag
+        for (const mod of clientTagModifications) {
+          const clientTag = clientTagsById.get(mod.clientTagId);
+          if (!clientTag || !clientTag.path) {
+            app.log.warn({ clientTagId: mod.clientTagId }, "Client tag not found in workspace");
+            continue;
+          }
+
+          try {
+            // Clone the tag's parameters and add server routing
+            // Filter out any existing server routing parameters
+            const updatedParameters = (clientTag.parameter || []).filter((p: any) =>
+              p.key !== 'server_container_url' && p.key !== 'transportUrl'
+            );
+
+            // Add server routing parameters
+            if (mod.clientToCreate === 'ga4') {
+              // ONLY Google Tag (googtag/gaawc) supports server_container_url
+              // GA4 Event tags (gaawe) do NOT support these parameters - GTM silently rejects them
+              if (clientTag.type === 'googtag' || clientTag.type === 'gaawc') {
+                updatedParameters.push({
+                  type: 'TEMPLATE',
+                  key: 'server_container_url',
+                  value: server_container_url
+                });
+                updatedParameters.push({
+                  type: 'TEMPLATE',
+                  key: 'transportUrl',
+                  value: server_container_url
+                });
+              } else {
+                // GA4 Event tags (gaawe) should not be modified - they're replaced by Google Tag
+                app.log.info({ tagType: clientTag.type, tagName: clientTag.name },
+                  "Skipping client tag modification - GA4 Event tags don't support server_container_url");
+                continue; // Skip this modification
+              }
+            } else if (mod.clientToCreate === 'googads') {
+              // Google Ads tags need server_container_url
+              updatedParameters.push({
+                type: 'TEMPLATE',
+                key: 'server_container_url',
+                value: server_container_url
+              });
+            }
+
+            // Update the tag
+            const updated = await gtmCall(app.log, "tags.update", () =>
+              tm.accounts.containers.workspaces.tags.update({
+                path: clientTag.path,
+                requestBody: {
+                  ...clientTag,
+                  parameter: updatedParameters,
+                  notes: (clientTag.notes || '') + `\n\n[Modified by Tag Relay] Routes to server container: ${server_container_url}`
+                }
+              })
+            );
+
+            modifiedClientTags.push({
+              clientTagId: mod.clientTagId,
+              clientTagName: mod.clientTagName,
+              routingAdded: mod.clientToCreate,
+              status: 'modified'
+            });
+
+            app.log.info({
+              tagId: mod.clientTagId,
+              tagName: mod.clientTagName,
+              clientType: mod.clientToCreate
+            }, "Modified client tag to route to server");
+
+          } catch (err) {
+            app.log.error({ err, mod }, "Failed to modify client tag");
+            modifiedClientTags.push({
+              clientTagId: mod.clientTagId,
+              clientTagName: mod.clientTagName,
+              routingAdded: mod.clientToCreate,
+              status: 'failed',
+              error: gtmErrorMessage(err)
+            });
+          }
+        }
+      }
+    } catch (err) {
+      app.log.error({ err }, "Failed to access client container for tag modifications");
+    }
+  }
+
   const nextSteps = [
-    `Open your GTM server container workspace: ${workspacePath}`,
-    "Review deployed tags and configure with your account IDs (Measurement ID, API Secret, etc.)",
-    "Unpause tags after configuration",
-    "Test in GTM Preview mode"
+    `✅ SERVER CONTAINER: Open workspace: ${workspacePath}`,
+    `   - ${serverClients.length} client(s) created: ${serverClients.map(c => c.name).join(', ')}`,
+    `   - ${deployedTags.length} tag(s) deployed`,
+    "   - Review and configure tags with your account IDs (Measurement ID, etc.)",
+    "   - Unpause tags after configuration"
   ];
 
-  if (clientProxyResults.length > 0) {
+  if (modifiedClientTags.length > 0) {
+    const successfulMods = modifiedClientTags.filter(m => m.status === 'modified').length;
     nextSteps.push(
-      `✅ ${clientProxyResults.filter(p => p.status === 'created').length} proxy tags auto-created in your CLIENT container`,
-      "Open your client container workspace and publish the proxy tags",
-      "These proxy tags detect behavioral triggers and send events to the server"
+      "",
+      `✅ CLIENT CONTAINER: ${successfulMods} tag(s) modified to route to server`,
+      `   - Modified tags now send data to: ${server_container_url}`,
+      `   - Client tags keep same triggers (scroll, time, etc.)`,
+      `   - Data flows: Browser → Your Server → Google/Meta/etc.`
     );
   }
 
-  nextSteps.push("Publish the workspace(s) when ready");
+  if (clientProxyResults.length > 0) {
+    nextSteps.push(
+      "",
+      `✅ CLIENT CONTAINER: ${clientProxyResults.filter(p => p.status === 'created').length} proxy tag(s) created`,
+      "   - These detect behavioral triggers and send custom events to server"
+    );
+  }
+
+  nextSteps.push(
+    "",
+    "🚀 PUBLISH:",
+    "   1. Test in GTM Preview mode (both containers)",
+    "   2. Publish CLIENT container first",
+    "   3. Publish SERVER container",
+    "   4. Monitor data flow in server Preview and GA4 DebugView"
+  );
+
+  // Save deployment result to DynamoDB for persistence
+  const deploymentRecord = {
+    timestamp: new Date().toISOString(),
+    deployed: deployedTags.length,
+    failed: errors.length,
+    deployedTagIds: deployedTags.map(t => t.clientTagId),
+    serverContainerPath,
+    server_container_url,
+    workspacePath
+  };
+
+  try {
+    await ddbDoc.send(
+      new UpdateCommand({
+        TableName: env.DDB_TABLE_RUNS,
+        Key: { runId },
+        UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp",
+        ExpressionAttributeValues: {
+          ":deployment": [deploymentRecord],
+          ":empty": [],
+          ":timestamp": deploymentRecord.timestamp
+        }
+      })
+    );
+    app.log.info({ runId, deployed: deployedTags.length }, "Saved deployment result to DynamoDB");
+  } catch (err) {
+    app.log.error({ err, runId }, "Failed to save deployment result to DynamoDB");
+    // Don't fail the deployment if we can't save - just log it
+  }
 
   return {
     runId,
@@ -1848,6 +2716,8 @@ app.post("/migrations/:runId/deploy-approved", async (req, reply) => {
     templateResults,
     deployedTags,
     errors,
+    serverClients,
+    modifiedClientTags,
     clientProxyTags: clientProxyResults,
     nextSteps
   };
@@ -1914,31 +2784,93 @@ app.post("/migrations/:runId/deploy-variables", async (req, reply) => {
 
   // Get or create workspace
   let workspacePath: string;
+  const WORKSPACE_NAME = "Tag Relay Migration";
+
   try {
+    // Always start with a clean workspace - delete any previous Tag Relay workspaces
     const workspaces = await gtmCall(app.log, "workspaces.list", () =>
       tm.accounts.containers.workspaces.list({
         parent: serverContainerPath
       })
     );
 
-    const defaultWorkspace = workspaces.data.workspace?.find((w: any) => w.name === "Default Workspace");
-    if (defaultWorkspace?.path) {
-      workspacePath = defaultWorkspace.path;
-    } else {
-      // Create a new workspace
-      const created = await gtmCall(app.log, "workspaces.create", () =>
-        tm.accounts.containers.workspaces.create({
-          parent: serverContainerPath,
-          requestBody: {
-            name: `Tag Relay Migration ${new Date().toISOString().split('T')[0]}`
+    // Delete all existing Tag Relay workspaces to abandon unpublished changes
+    const tagRelayWorkspaces = workspaces.data.workspace?.filter((w: any) =>
+      w.name?.startsWith("Tag Relay")
+    ) || [];
+
+    if (tagRelayWorkspaces.length > 0) {
+      app.log.info({
+        count: tagRelayWorkspaces.length,
+        names: tagRelayWorkspaces.map((w: any) => w.name)
+      }, "Deleting existing Tag Relay workspaces to start fresh");
+
+      // Delete all old workspaces - MUST succeed before creating new one
+      for (const ws of tagRelayWorkspaces) {
+        if (ws.path) {
+          app.log.info({ workspacePath: ws.path, workspaceName: ws.name }, "Deleting workspace");
+
+          // Retry deletion up to 3 times if it fails
+          let deleteSuccess = false;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              await gtmCall(app.log, "workspaces.delete", () =>
+                tm.accounts.containers.workspaces.delete({
+                  path: ws.path!
+                })
+              );
+              app.log.info({ workspaceName: ws.name, attempt }, "Workspace deleted successfully");
+              deleteSuccess = true;
+              break;
+            } catch (deleteErr) {
+              if (attempt < 3) {
+                app.log.warn({
+                  err: deleteErr,
+                  workspaceName: ws.name,
+                  attempt
+                }, "Workspace deletion failed, retrying...");
+                // Wait 1 second before retry to let GTM API settle
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              } else {
+                app.log.error({
+                  err: deleteErr,
+                  workspaceName: ws.name
+                }, "Failed to delete workspace after 3 attempts");
+                // If deletion fails after retries, throw error
+                return reply.code(502).send({
+                  message: "Failed to delete existing workspace. Please manually delete the 'Tag Relay Migration' workspace in GTM and try again.",
+                  error: gtmErrorMessage(deleteErr),
+                  workspacePath: ws.path
+                });
+              }
+            }
           }
-        })
-      );
-      workspacePath = created.data.path!;
+        }
+      }
+
+      // Wait a moment after all deletions to let GTM API settle
+      app.log.info("Waiting for GTM API to settle after deletions...");
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    } else {
+      app.log.info("No existing Tag Relay workspaces found");
     }
+
+    // Create a fresh workspace for this deployment
+    app.log.info({ workspaceName: WORKSPACE_NAME }, "Creating new workspace");
+    const created = await gtmCall(app.log, "workspaces.create", () =>
+      tm.accounts.containers.workspaces.create({
+        parent: serverContainerPath,
+        requestBody: {
+          name: WORKSPACE_NAME,
+          description: "Automated server-side migration workspace created by Tag Relay"
+        }
+      })
+    );
+    workspacePath = created.data.path!;
+    app.log.info({ workspacePath, workspaceName: WORKSPACE_NAME }, "Created fresh workspace for deployment");
   } catch (err) {
-    app.log.error(err);
-    return reply.code(502).send({ message: "Failed to get or create workspace", error: gtmErrorMessage(err) });
+    app.log.error({ err }, "Failed to create workspace");
+    return reply.code(502).send({ message: "Failed to create clean workspace", error: gtmErrorMessage(err) });
   }
 
   // Sort variables by dependency order (constants first, then data layer, etc.)

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { AuthService } from "./service.js";
+import { ROLE_PERMISSIONS } from "./types.js";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
 
@@ -24,8 +25,6 @@ describe("AuthService", () => {
 
   describe("ROLE_PERMISSIONS", () => {
     it("should define permissions for all roles", () => {
-      const { ROLE_PERMISSIONS } = require("./types.js");
-
       expect(ROLE_PERMISSIONS.owner).toBeDefined();
       expect(ROLE_PERMISSIONS.admin).toBeDefined();
       expect(ROLE_PERMISSIONS.member).toBeDefined();
@@ -33,16 +32,12 @@ describe("AuthService", () => {
     });
 
     it("should give owner all permissions", () => {
-      const { ROLE_PERMISSIONS } = require("./types.js");
-
       expect(ROLE_PERMISSIONS.owner).toContain("organization:delete");
       expect(ROLE_PERMISSIONS.owner).toContain("members:delete");
       expect(ROLE_PERMISSIONS.owner).toContain("api_keys:delete");
     });
 
     it("should restrict viewer to read-only", () => {
-      const { ROLE_PERMISSIONS } = require("./types.js");
-
       expect(ROLE_PERMISSIONS.viewer).toContain("imports:read");
       expect(ROLE_PERMISSIONS.viewer).not.toContain("imports:write");
       expect(ROLE_PERMISSIONS.viewer).not.toContain("imports:delete");

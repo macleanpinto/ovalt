@@ -1,10 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
-import { apiClient, getApiBaseUrl, Run } from '@/lib/api-client';
+import {
+  apiClient,
+  reconnectGoogleTagManager,
+  isGtmSessionApiError,
+  GTM_SESSION_STORAGE_KEY,
+  Run
+} from '@/lib/api-client';
 
 interface DetectedTag {
   id: string;
@@ -100,6 +106,7 @@ export default function MigrationWorkspace() {
   const [isDeploying, setIsDeploying] = useState(false);
   const [deploymentResult, setDeploymentResult] = useState<any>(null);
   const [serverContainerPath, setServerContainerPath] = useState('');
+  const [server_container_url, setserver_container_url] = useState('');
   const [serverContainers, setServerContainers] = useState<any[]>([]);
   const [loadingContainers, setLoadingContainers] = useState(false);
   const [containerMode, setContainerMode] = useState<'existing' | 'create' | null>(null);
@@ -109,10 +116,208 @@ export default function MigrationWorkspace() {
   const [isCreatingContainer, setIsCreatingContainer] = useState(false);
   const [needsGtmReconnect, setNeedsGtmReconnect] = useState(false);
 
+  // Tag grouping state
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['all'])); // Start with all groups expanded
+  const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set()); // Track expanded individual tag cards
+  const [activeGroupKey, setActiveGroupKey] = useState<string>('all');
+  const [showDeploymentModal, setShowDeploymentModal] = useState(false);
+  /** Main workspace area: tag review vs deployment log / progress */
+  const [workspaceTab, setWorkspaceTab] = useState<'review' | 'deployment'>('review');
+  const deploymentLogRef = useRef<HTMLDivElement>(null);
+
+  // Deployment rules state
+  const [deploymentRules, setDeploymentRules] = useState({
+    debugMode: false,
+    stagingFirst: true,
+    piiSanitization: true,
+    backupFirst: true
+  });
+
   // Helper to get GTM session
   const getGtmSession = () => {
     if (typeof window === 'undefined') return null;
-    return localStorage.getItem('gtm_session');
+    return localStorage.getItem(GTM_SESSION_STORAGE_KEY);
+  };
+
+  const handleGtmReconnect = () => {
+    reconnectGoogleTagManager(`/migrations/${runId}`).catch(() =>
+      alert('Could not start GTM OAuth. Check you are logged in.')
+    );
+  };
+
+  const loadGtmAccounts = async (): Promise<any[]> => {
+    const gtmSessionId = getGtmSession();
+    if (!gtmSessionId) {
+      setNeedsGtmReconnect(true);
+      addLog('❌ No GTM session saved. Click "Reconnect GTM" in the deployment dialog (or under the header), then try again.');
+      return [];
+    }
+    try {
+      const accountsRes = await apiClient.getGtmAccounts(gtmSessionId);
+      const accounts = accountsRes.accounts || [];
+      setGtmAccounts(accounts);
+      return accounts;
+    } catch (e) {
+      if (isGtmSessionApiError(e)) setNeedsGtmReconnect(true);
+      throw e;
+    }
+  };
+
+  const loadServerContainers = async () => {
+    setLoadingContainers(true);
+    try {
+      const gtmSessionId = getGtmSession();
+      if (!gtmSessionId) {
+        setNeedsGtmReconnect(true);
+        alert(
+          'No Google Tag Manager session is saved in this browser. Click "Reconnect GTM" in this dialog (next to Load containers or at the bottom), then try Load containers again.'
+        );
+        return;
+      }
+
+      const accounts = (gtmAccounts.length > 0 ? gtmAccounts : await loadGtmAccounts()) || [];
+      const byPath = new Map<string, any>();
+
+      for (const account of accounts) {
+        const accountPath = account?.path || (account?.accountId ? `accounts/${account.accountId}` : null);
+        if (!accountPath) continue;
+
+        try {
+          const containersRes = await apiClient.getGtmContainers(gtmSessionId, accountPath);
+          const containers = containersRes.containers || [];
+          for (const c of containers) {
+            const usage = Array.isArray(c?.usageContext) ? c.usageContext.map((x: any) => String(x).toLowerCase()) : [];
+            const isServer = usage.includes('server');
+            if (!isServer) continue;
+            if (c?.path && !byPath.has(c.path)) byPath.set(c.path, c);
+          }
+        } catch (err: any) {
+          addLog(`⚠️ Could not list containers for ${accountPath}: ${err?.message || 'unknown error'}`);
+        }
+      }
+
+      const all = Array.from(byPath.values()).sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
+      setServerContainers(all);
+      addLog(`Found ${all.length} server container(s)`);
+    } catch (err: any) {
+      if (isGtmSessionApiError(err)) setNeedsGtmReconnect(true);
+      addLog(`❌ Failed to load server containers: ${err?.message || 'unknown error'}`);
+      alert(`Failed to load server containers: ${err?.message || 'unknown error'}`);
+    } finally {
+      setLoadingContainers(false);
+    }
+  };
+
+  // Map client tag types to server destination types (simplified client-side version)
+  const getServerType = (clientType: string): string | null => {
+    const mapping: Record<string, string | null> = {
+      'googtag': 'sgtmgaaw',
+      'gaawe': 'sgtmgaaw',
+      'gaawc': 'sgtmgaaw',
+      'awct': 'sgtmgads',
+      'sp': 'sgtmgads',
+      'fls': 'sgtmflood',
+      'flc': 'sgtmflood',
+      'html': null, // Custom HTML can't be directly migrated
+      'img': null, // Image tag typically can't migrate
+    };
+    return mapping[clientType] || 'unknown';
+  };
+
+  // Get human-readable label for server type (legacy / family)
+  const getDestinationLabel = (serverType: string | null): string => {
+    if (!serverType) return 'Not Supported';
+    const labels: Record<string, string> = {
+      'sgtmgaaw': 'GA4 Events',
+      'sgtmgads': 'Google Ads',
+      'sgtmflood': 'Floodlight',
+      'sgtmmeta': 'Meta Pixel',
+      'unknown': 'Other Platforms'
+    };
+    return labels[serverType] || serverType;
+  };
+
+  /** Sidebar / headers: label by client GTM tag type id (e.g. gaawe, googtag). */
+  const getClientTagTypeLabel = (clientTagType: string | null | undefined): string => {
+    if (!clientTagType) return 'Unknown type';
+    const labels: Record<string, string> = {
+      googtag: 'Google tag',
+      gaawe: 'GA4 Event',
+      gaawc: 'GA4 Configuration',
+      awct: 'Google Ads conversion',
+      sp: 'Google Ads remarketing',
+      fls: 'Floodlight (sales)',
+      flc: 'Floodlight (counter)',
+      html: 'Custom HTML',
+      img: 'Custom Image',
+      gclidw: 'Conversion Linker'
+    };
+    return labels[clientTagType] || clientTagType;
+  };
+
+  // Get icon for destination type
+  const getDestinationIcon = (serverType: string | null): string => {
+    if (!serverType) return 'block';
+    const icons: Record<string, string> = {
+      'sgtmgaaw': 'analytics',
+      'sgtmgads': 'ads_click',
+      'sgtmflood': 'campaign',
+      'sgtmmeta': 'share',
+      'unknown': 'category'
+    };
+    return icons[serverType] || 'sell';
+  };
+
+  // Get color for destination type
+  const getDestinationColor = (serverType: string | null): string => {
+    if (!serverType) return 'bg-error/20 text-error border-error/30';
+    const colors: Record<string, string> = {
+      'sgtmgaaw': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+      'sgtmgads': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+      'sgtmflood': 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+      'sgtmmeta': 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+      'unknown': 'bg-green-500/20 text-green-400 border-green-500/30'
+    };
+    return colors[serverType] || 'bg-surface-variant/20 text-on-surface-variant border-surface-variant/30';
+  };
+
+  // Group tags by client GTM tag type (one server tag will be created per type on deploy)
+  const groupTagsByClientType = (mappings: MappingRecord[]) => {
+    const grouped = new Map<string, MappingRecord[]>();
+
+    for (const mapping of mappings) {
+      const key = mapping.clientTagType || 'unknown';
+
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+      grouped.get(key)!.push(mapping);
+    }
+
+    return grouped;
+  };
+
+  // Toggle group expansion
+  const toggleGroup = (groupKey: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  };
+
+  // Approve all tags in a group
+  const approveAllInGroup = (groupTags: MappingRecord[]) => {
+    setApprovedTags(prev => {
+      const next = new Set(prev);
+      groupTags.forEach(tag => next.add(tag.clientTagId));
+      return next;
+    });
+    addLog(`✅ Approved ${groupTags.length} tag(s) in group`);
   };
 
   // Helper to process deployment results and update deployed tags
@@ -142,9 +347,44 @@ export default function MigrationWorkspace() {
         addLog(`✅ Moved ${successfullyDeployed.length} tag(s) to deployed list`);
       }
     }
+
+    const failed =
+      typeof result.failed === 'number'
+        ? result.failed
+        : Array.isArray(result.errors)
+          ? result.errors.length
+          : 0;
+    addLog(
+      `✅ Deployment finished: ${result.deployed ?? 0} tag(s) deployed, ${failed} failed`
+    );
+
+    if (result.workspacePath) {
+      addLog(`📂 Server workspace: ${result.workspacePath}`);
+    }
+    if (Array.isArray(result.serverClients) && result.serverClients.length > 0) {
+      addLog(
+        `🔌 Server client(s) created: ${result.serverClients.map((c: any) => c.name).join(', ')}`
+      );
+    }
+    if (Array.isArray(result.nextSteps)) {
+      result.nextSteps.forEach((line: string) => {
+        const s = String(line);
+        if (s.trim()) addLog(s);
+      });
+    }
+    if (Array.isArray(result.errors)) {
+      result.errors.forEach((e: any) => {
+        const msg = e?.error || e?.message || JSON.stringify(e);
+        const who = e?.clientTagName || e?.clientTagId || e?.clientType || 'Error';
+        addLog(`❌ ${who}: ${msg}`);
+      });
+    }
   };
 
-  console.log('Render state:', { isEditing, selectedElement: selectedElement?.name });
+  useEffect(() => {
+    if (workspaceTab !== 'deployment' || !deploymentLogRef.current) return;
+    deploymentLogRef.current.scrollTop = deploymentLogRef.current.scrollHeight;
+  }, [logs, workspaceTab, isDeploying]);
 
   // Handle GTM session from OAuth callback
   useEffect(() => {
@@ -160,6 +400,12 @@ export default function MigrationWorkspace() {
   }, [searchParams]);
 
   useEffect(() => {
+    const onLost = () => setNeedsGtmReconnect(true);
+    window.addEventListener('tagrelay:gtm-session-lost', onLost);
+    return () => window.removeEventListener('tagrelay:gtm-session-lost', onLost);
+  }, []);
+
+  useEffect(() => {
     const loadRunData = async () => {
       if (!runId) return;
 
@@ -171,12 +417,33 @@ export default function MigrationWorkspace() {
         addLog(`Connected to migration ${runId.slice(0, 8)}...`);
         addLog(`Status: ${runData.status.toUpperCase()}`);
 
+        // Load previously deployed tags from deployment history
+        if (runData.deploymentHistory && runData.deploymentHistory.length > 0) {
+          const allDeployedTagIds = new Set<string>();
+          runData.deploymentHistory.forEach(deployment => {
+            deployment.deployedTagIds?.forEach(tagId => allDeployedTagIds.add(tagId));
+          });
+
+          if (allDeployedTagIds.size > 0) {
+            setDeployedTags(allDeployedTagIds);
+            addLog(`✅ Loaded ${allDeployedTagIds.size} previously deployed tags`);
+          }
+        }
+
         // Try to load report if available
         if (runData.status === 'completed' || runData.status === 'needs_review') {
           try {
             const reportData = await apiClient.getRunReport(runId);
             setReport(reportData);
             addLog(`Migration report loaded: ${reportData.detectedTags?.length || 0} tags detected`);
+
+            // Expand all tag groups by default
+            if (reportData.mappings && reportData.mappings.length > 0) {
+              const allClientTypes = new Set<string>(
+                reportData.mappings.map((m: MappingRecord) => m.clientTagType || 'unknown')
+              );
+              setExpandedGroups(allClientTypes);
+            }
 
             // Select first tag by default
             if (reportData.detectedTags && reportData.detectedTags.length > 0) {
@@ -326,43 +593,6 @@ export default function MigrationWorkspace() {
     }
   };
 
-  const getMigrationStatusBadge = () => {
-    if (!run) return null;
-
-    switch (run.status) {
-      case 'completed':
-        return (
-          <span className="bg-secondary/10 text-secondary px-3 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest border border-secondary/20 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-secondary"></span>
-            Completed
-          </span>
-        );
-      case 'running':
-        return (
-          <span className="bg-[#F63A22]/10 text-[#F63A22] px-3 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest border border-[#F63A22]/20 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#F63A22] animate-pulse"></span>
-            In Progress
-          </span>
-        );
-      case 'queued':
-        return (
-          <span className="bg-[#ffb4a7]/10 text-[#ffb4a7] px-3 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest border border-[#ffb4a7]/20 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#ffb4a7] animate-pulse"></span>
-            Queued
-          </span>
-        );
-      case 'failed':
-        return (
-          <span className="bg-error/10 text-error px-3 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest border border-error/20 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-error"></span>
-            Failed
-          </span>
-        );
-      default:
-        return null;
-    }
-  };
-
   const getIconForTagType = (type: string): string => {
     const normalizedType = type.toLowerCase();
     if (normalizedType.includes('analytics') || normalizedType.includes('ga')) return 'analytics';
@@ -427,14 +657,14 @@ export default function MigrationWorkspace() {
   });
 
   const completedCount = (report?.detectedTags || []).filter(tag => tag.status === 'ready').length;
-  const totalCount = report?.detectedTags?.length || 0;
+  const detectedTagCount = report?.detectedTags?.length || 0;
   /** Footer bar + confidence: resolved = deployed to server or explicitly skipped */
   const deploymentResolvedCount = deployedTags.size + skippedTags.size;
   const deploymentProgressPercent =
-    totalCount > 0 ? (deploymentResolvedCount / totalCount) * 100 : 0;
+    detectedTagCount > 0 ? (deploymentResolvedCount / detectedTagCount) * 100 : 0;
   const deploymentConfidenceScore =
-    totalCount > 0
-      ? Number(((deploymentResolvedCount / totalCount) * 10).toFixed(1))
+    detectedTagCount > 0
+      ? Number(((deploymentResolvedCount / detectedTagCount) * 10).toFixed(1))
       : 0;
 
   if (isLoading) {
@@ -561,1975 +791,849 @@ export default function MigrationWorkspace() {
     );
   }
 
-  // Main workspace view (only shown when completed or needs_review)
+  // ===========================
+  // Redesigned Workspace (2026)
+  // ===========================
+  const tagMappings = report?.mappings ?? [];
+  const grouped = groupTagsByClientType(tagMappings);
+  const sortedGroups = Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b));
+  const groups = [['all', tagMappings] as const, ...sortedGroups] as Array<
+    readonly [string, MappingRecord[]]
+  >;
+  const active = groups.find(([k]) => k === activeGroupKey) ?? groups[0];
+  const activeTags = active?.[1] ?? [];
+
+  const approvedCount = tagMappings.filter((m) => approvedTags.has(m.clientTagId)).length;
+  const approvalTotalCount = tagMappings.length || 1;
+  const progressPct = Math.round((approvedCount / approvalTotalCount) * 100);
+  const approvedMappingsList = tagMappings.filter((m) => approvedTags.has(m.clientTagId));
+  const serverTagsToCreate = new Set(approvedMappingsList.map((m) => m.clientTagType || 'unknown')).size;
+
   return (
     <ProtectedRoute>
-      <main className="min-h-screen bg-background pb-24">
-        {/* Header */}
-        <header className="border-b border-outline-variant/10 bg-surface-container/50 backdrop-blur-xl">
-          <div className="max-w-[1920px] mx-auto px-8 py-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
-              <div className="space-y-1">
-                <div className="flex items-center gap-3">
-                  <h1 className="text-3xl font-extrabold tracking-tighter font-headline text-white">
-                    Migration Hub
-                  </h1>
-                  {getMigrationStatusBadge()}
-                </div>
-                <div className="flex items-center gap-2 text-on-surface-variant font-label text-sm">
-                  <span className="material-symbols-outlined text-sm">settings_input_component</span>
-                  <span>Run ID:</span>
-                  <code className="text-primary font-medium font-mono text-xs">{runId.slice(0, 12)}</code>
-                  <span className="mx-1 opacity-20">|</span>
-                  <span className="material-symbols-outlined text-sm">history</span>
-                  <span>Created {new Date(run.createdAt).toLocaleString()}</span>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <button className="bg-surface-container-highest px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-surface-bright transition-colors text-white">
-                  <span className="material-symbols-outlined text-lg">download</span>
-                  Export Blueprint
-                </button>
-                <Link
-                  href="/migrations"
-                  className="bg-surface-container-highest px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-surface-bright transition-colors text-white"
-                >
-                  <span className="material-symbols-outlined text-lg">arrow_back</span>
-                  Back
-                </Link>
-              </div>
-            </div>
+      <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
+        <header className="bg-[#1A1A1A]/80 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center w-full px-8 h-16 border-b border-white/5">
+          <div className="flex items-center gap-8">
+            <span className="text-xl font-bold tracking-tighter text-[#41ffaf]">Ovalt</span>
+            <nav className="hidden md:flex gap-6 items-center">
+              <button
+                type="button"
+                onClick={() => setWorkspaceTab('review')}
+                className={`font-medium pb-1 border-b-2 transition-colors ${
+                  workspaceTab === 'review'
+                    ? 'text-[#41ffaf] font-semibold border-[#41ffaf]'
+                    : 'text-gray-400 border-transparent hover:text-white'
+                }`}
+              >
+                Tag review
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkspaceTab('deployment')}
+                className={`font-medium pb-1 border-b-2 transition-colors flex items-center gap-2 ${
+                  workspaceTab === 'deployment'
+                    ? 'text-[#41ffaf] font-semibold border-[#41ffaf]'
+                    : 'text-gray-400 border-transparent hover:text-white'
+                }`}
+              >
+                Deployment log
+                {(isDeploying || deploymentResult) && (
+                  <span className="h-2 w-2 rounded-full bg-[#41ffaf] animate-pulse" aria-hidden />
+                )}
+              </button>
+              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/migrations">
+                All migrations
+              </Link>
+              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
+                Monitoring
+              </Link>
+              <Link className="text-gray-400 font-medium hover:text-white transition-colors" href="/dashboard">
+                Settings
+              </Link>
+            </nav>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              className="bg-[#41ffaf] text-[#003822] px-4 py-1.5 rounded-lg text-sm font-semibold hover:opacity-90 transition-all active:scale-95"
+              onClick={() => setShowDeploymentModal(true)}
+            >
+              Deploy Changes
+            </button>
           </div>
         </header>
 
-        {/* Main Workspace */}
-        <div className="max-w-[1920px] mx-auto px-8 py-6">
-          {!report ? (
-            <div className="text-center py-12">
-              <p className="text-on-surface-variant">No report data available yet.</p>
-            </div>
-          ) : (
-            <>
-              {/* Quick Guide Banner */}
-              {showGuide && (
-                <div className="bg-gradient-to-r from-primary/5 to-secondary/5 border border-primary/10 rounded-xl p-4 mb-6">
-                  <div className="flex items-start gap-4">
-                    <div className="bg-primary/20 p-2 rounded-lg">
-                      <span className="material-symbols-outlined text-primary text-2xl">lightbulb</span>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-sm font-bold text-white mb-1">How Migration Review Works</h3>
-                      <p className="text-xs text-on-surface-variant leading-relaxed mb-2">
-                        We&apos;ve analyzed your GTM container and created server-side recommendations for each tag using production rules and AI-enhanced web research.
-                      </p>
-                      <div className="flex gap-3 mb-3 text-[10px]">
-                        <div className="flex items-center gap-1">
-                          <span className="material-symbols-outlined text-xs text-secondary">book</span>
-                          <span className="text-on-surface-variant">Rule-based from official docs</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="material-symbols-outlined text-xs text-[#ce93d8]">psychology</span>
-                          <span className="text-on-surface-variant">AI-enhanced when needed</span>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div className="flex items-start gap-2">
-                          <div className="bg-secondary/20 rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">
-                            <span className="text-[10px] font-bold text-secondary">1</span>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold text-white">Review Tags</p>
-                            <p className="text-[9px] text-on-surface-variant">Click each tag on the left to see its server-side mapping</p>
-                          </div>
-                        </div>
-                        <div className="flex items-start gap-2">
-                          <div className="bg-secondary/20 rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">
-                            <span className="text-[10px] font-bold text-secondary">2</span>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold text-white">Take Action</p>
-                            <p className="text-[9px] text-on-surface-variant">Approve ready tags, review medium-confidence ones, configure manual ones</p>
-                          </div>
-                        </div>
-                        <div className="flex items-start gap-2">
-                          <div className="bg-secondary/20 rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">
-                            <span className="text-[10px] font-bold text-secondary">3</span>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold text-white">Deploy</p>
-                            <p className="text-[9px] text-on-surface-variant">Export the blueprint and follow the deployment guide</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setShowGuide(false)}
-                      className="text-on-surface-variant hover:text-white transition-colors"
-                    >
-                      <span className="material-symbols-outlined text-lg">close</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Container Overview */}
-              <div className="bg-surface-container-high border border-outline-variant/10 rounded-xl p-4 mb-6">
-                <div className="flex items-start gap-3">
-                  <div className="bg-primary/20 p-2 rounded">
-                    <span className="material-symbols-outlined text-primary text-lg">inventory_2</span>
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-bold text-white mb-2">Container Elements Overview</h3>
-                    <p className="text-[10px] text-on-surface-variant mb-3">
-                      Your GTM container has {report.containerSummary?.totalTags || totalCount} tags, {report.containerSummary?.totalTriggers || 0} triggers,
-                      and {report.containerSummary?.totalVariables || 0} variables. Here&apos;s how each type is handled in the migration:
-                    </p>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="bg-surface-container p-3 rounded-lg border-l-2 border-primary">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="material-symbols-outlined text-sm text-primary">sell</span>
-                          <p className="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Tags</p>
-                        </div>
-                        <p className="text-2xl font-bold text-white mb-1">{totalCount}</p>
-                        <p className="text-[9px] text-secondary font-bold mb-1">✓ MIGRATING</p>
-                        <p className="text-[9px] text-on-surface-variant leading-snug">
-                          Each tag is analyzed and mapped to server-side equivalents
-                        </p>
-                      </div>
-                      <div className="bg-surface-container p-3 rounded-lg border-l-2 border-outline-variant">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="material-symbols-outlined text-sm text-on-surface-variant">bolt</span>
-                          <p className="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Triggers</p>
-                        </div>
-                        <p className="text-2xl font-bold text-on-surface-variant mb-1">{report.containerSummary?.totalTriggers || 0}</p>
-                        <p className="text-[9px] text-[#F63A22] font-bold mb-1">ℹ️ REFERENCE</p>
-                        <p className="text-[9px] text-on-surface-variant leading-snug">
-                          Shown in tag mappings to understand when tags fire
-                        </p>
-                      </div>
-                      <div className="bg-surface-container p-3 rounded-lg border-l-2 border-outline-variant">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="material-symbols-outlined text-sm text-on-surface-variant">data_object</span>
-                          <p className="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Variables</p>
-                        </div>
-                        <p className="text-2xl font-bold text-on-surface-variant mb-1">{report.containerSummary?.totalVariables || 0}</p>
-                        <p className="text-[9px] text-[#F63A22] font-bold mb-1">⚙️ MANUAL</p>
-                        <p className="text-[9px] text-on-surface-variant leading-snug">
-                          Need to be recreated or mapped in server container
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Migration Progress Summary */}
-              <div className="bg-surface-container-high border border-outline-variant/10 rounded-xl p-4 mb-6">
-                <div className="flex items-start gap-3">
-                  <div className="bg-secondary/20 p-2 rounded">
-                    <span className="material-symbols-outlined text-secondary text-lg">task_alt</span>
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-bold text-white mb-2">Migration Review Progress</h3>
-                    <p className="text-[10px] text-on-surface-variant mb-3">
-                      Track your review progress. Approve tags you&apos;ve reviewed and skip ones you&apos;re unsure about for later.
-                    </p>
-                    <div className="grid grid-cols-4 gap-3">
-                      <div className="bg-surface-container p-3 rounded-lg border-l-2 border-secondary">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="material-symbols-outlined text-sm text-secondary" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
-                          <p className="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Approved</p>
-                        </div>
-                        <p className="text-2xl font-bold text-secondary">{approvedTags.size}</p>
-                        <p className="text-[9px] text-on-surface-variant mt-1">
-                          Ready for deployment
-                        </p>
-                      </div>
-                      <div className="bg-surface-container p-3 rounded-lg border-l-2 border-[#F63A22]">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="material-symbols-outlined text-sm text-[#F63A22]">pending</span>
-                          <p className="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Pending</p>
-                        </div>
-                        <p className="text-2xl font-bold text-white">{totalCount - approvedTags.size - skippedTags.size}</p>
-                        <p className="text-[9px] text-on-surface-variant mt-1">
-                          Needs review
-                        </p>
-                      </div>
-                      <div className="bg-surface-container p-3 rounded-lg border-l-2 border-surface-variant">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="material-symbols-outlined text-sm text-on-surface-variant">visibility_off</span>
-                          <p className="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Skipped</p>
-                        </div>
-                        <p className="text-2xl font-bold text-on-surface-variant">{skippedTags.size}</p>
-                        <p className="text-[9px] text-on-surface-variant mt-1">
-                          For later migration
-                        </p>
-                      </div>
-                      <div className="bg-surface-container p-3 rounded-lg border-l-2 border-primary">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="material-symbols-outlined text-sm text-primary">sell</span>
-                          <p className="text-[10px] font-label uppercase tracking-widest text-on-surface-variant">Total</p>
-                        </div>
-                        <p className="text-2xl font-bold text-white">{totalCount}</p>
-                        <p className="text-[9px] text-on-surface-variant mt-1">
-                          Tags in container
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Bulk Actions */}
-                    {(totalCount - approvedTags.size - skippedTags.size) > 0 && (
-                      <div className="mt-4 flex gap-2">
-                        <button
-                          onClick={() => {
-                            const allTagIds = allElements
-                              .filter(el => el.elementType === 'tag' && !skippedTags.has(el.id))
-                              .map(el => el.id);
-                            setApprovedTags(new Set(allTagIds));
-                            addLog(`✅ Approved all ${allTagIds.length} non-skipped tags`);
-                          }}
-                          className="flex-1 px-4 py-2 bg-secondary text-on-primary rounded-lg text-xs font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2"
-                        >
-                          <span className="material-symbols-outlined text-sm">done_all</span>
-                          Approve All ({totalCount - approvedTags.size - skippedTags.size})
-                        </button>
-
-                        {approvedTags.size > 0 && (
-                          <button
-                            onClick={() => {
-                              setApprovedTags(new Set());
-                              addLog(`🔄 Cleared all approvals`);
-                            }}
-                            className="px-4 py-2 bg-surface-container-highest text-on-surface-variant rounded-lg text-xs font-bold hover:bg-surface-bright transition-all flex items-center gap-2"
-                          >
-                            <span className="material-symbols-outlined text-sm">clear_all</span>
-                            Clear All
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* GTM Reconnect Modal */}
-              {needsGtmReconnect && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                  <div className="bg-surface-container-high rounded-xl border border-outline-variant max-w-md w-full p-6">
-                    <div className="flex items-start gap-4 mb-4">
-                      <div className="bg-[#F63A22]/20 p-3 rounded-lg">
-                        <span className="material-symbols-outlined text-[#F63A22] text-2xl">sync_problem</span>
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="text-lg font-bold text-white mb-2">Reconnect to Google Tag Manager</h3>
-                        <p className="text-sm text-on-surface-variant">
-                          Your Google Tag Manager session has expired. Please reconnect to continue with deployment.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                      <button
-                        onClick={async () => {
-                          try {
-                            const returnUrl = `/migrations/${runId}`;
-                            const { url } = await apiClient.startGtmOAuth(returnUrl);
-                            window.location.href = url;
-                          } catch (error: any) {
-                            alert(`Failed to start OAuth: ${error.message}`);
-                          }
-                        }}
-                        className="flex-1 px-4 py-3 bg-primary text-on-primary rounded-lg font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2"
-                      >
-                        <span className="material-symbols-outlined text-lg">account_circle</span>
-                        Reconnect GTM
-                      </button>
-
-                      <button
-                        onClick={() => setNeedsGtmReconnect(false)}
-                        className="px-4 py-3 bg-surface-container-highest text-white rounded-lg font-bold hover:bg-surface-bright transition-all"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-
-                    <p className="text-[10px] text-on-surface-variant mt-4 text-center">
-                      You&apos;ll be redirected to Google to authorize access, then return here automatically.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Automated Deployment */}
-              {approvedTags.size > 0 && !deploymentResult && (
-                <div className="bg-gradient-to-r from-secondary/10 to-primary/10 border border-secondary/20 rounded-xl p-6 mb-6">
-                  <div className="flex items-start gap-4">
-                    <div className="bg-secondary/20 p-3 rounded-lg">
-                      <span className="material-symbols-outlined text-secondary text-2xl">rocket_launch</span>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-bold text-white mb-2">Ready to Deploy</h3>
-                      <p className="text-sm text-on-surface-variant mb-4">
-                        You&apos;ve approved {approvedTags.size} tag{approvedTags.size !== 1 ? 's' : ''}. Deploy them automatically to your server-side GTM container.
-                      </p>
-
-                      {!serverContainerPath ? (
-                        <div className="space-y-4">
-                          {/* Step 1: Choose mode */}
-                          {!containerMode ? (
-                            <div>
-                              <label className="block text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-3">
-                                Server Container Setup
-                              </label>
-                              <div className="grid grid-cols-2 gap-3">
-                                <button
-                                  onClick={async () => {
-                                    setContainerMode('create');
-                                    // Load accounts
-                                    try {
-                                      const gtmSessionId = getGtmSession();
-                                      if (gtmSessionId) {
-                                        const accountsRes = await apiClient.getGtmAccounts(gtmSessionId);
-                                        setGtmAccounts(accountsRes.accounts || []);
-                                        addLog(`Loaded ${accountsRes.accounts?.length || 0} GTM account(s)`);
-                                      }
-                                    } catch (err) {
-                                      console.error('Error loading accounts:', err);
-                                    }
-                                  }}
-                                  className="p-4 bg-primary/10 border-2 border-primary/30 rounded-lg text-left hover:bg-primary/20 transition-all group"
-                                >
-                                  <span className="material-symbols-outlined text-primary text-2xl mb-2 block">add_circle</span>
-                                  <div className="text-sm font-bold text-white mb-1">Create New</div>
-                                  <div className="text-[10px] text-on-surface-variant">Create a new server container</div>
-                                </button>
-
-                                <button
-                                  onClick={async () => {
-                                    const gtmSessionId = getGtmSession();
-                                    if (!gtmSessionId) {
-                                      setNeedsGtmReconnect(true);
-                                      return;
-                                    }
-
-                                    setContainerMode('existing');
-                                    setLoadingContainers(true);
-                                    try {
-                                      const accountsRes = await apiClient.getGtmAccounts(gtmSessionId);
-                                      const accounts = accountsRes.accounts || [];
-
-                                      const allContainers: any[] = [];
-                                      for (const account of accounts) {
-                                        try {
-                                          const containersRes = await apiClient.getGtmContainers(gtmSessionId, account.path);
-                                          const containers = containersRes.containers || [];
-                                          const serverOnly = containers.filter((c: any) =>
-                                            c.usageContext?.includes('server')
-                                          );
-                                          allContainers.push(...serverOnly);
-                                        } catch (err) {
-                                          console.error('Error loading containers:', err);
-                                        }
-                                      }
-
-                                      setServerContainers(allContainers);
-                                      if (allContainers.length === 0) {
-                                        alert('No server-side containers found. Please create one first.');
-                                        setContainerMode(null);
-                                      } else {
-                                        addLog(`Found ${allContainers.length} server container(s)`);
-                                      }
-                                    } catch (error: any) {
-                                      if (error.message?.includes('401') || error.message?.includes('session')) {
-                                        setNeedsGtmReconnect(true);
-                                        setContainerMode(null);
-                                      } else {
-                                        alert(`Failed to load containers: ${error.message}`);
-                                        setContainerMode(null);
-                                      }
-                                    } finally {
-                                      setLoadingContainers(false);
-                                    }
-                                  }}
-                                  className="p-4 bg-secondary/10 border-2 border-secondary/30 rounded-lg text-left hover:bg-secondary/20 transition-all group"
-                                >
-                                  <span className="material-symbols-outlined text-secondary text-2xl mb-2 block">inventory_2</span>
-                                  <div className="text-sm font-bold text-white mb-1">Use Existing</div>
-                                  <div className="text-[10px] text-on-surface-variant">Select an existing container</div>
-                                </button>
-                              </div>
-                            </div>
-                          ) : containerMode === 'create' ? (
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between mb-2">
-                                <label className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">
-                                  Create Server Container
-                                </label>
-                                <button
-                                  onClick={() => {
-                                    setContainerMode(null);
-                                    setSelectedAccount('');
-                                    setNewContainerName('');
-                                  }}
-                                  className="text-xs text-on-surface-variant hover:text-white"
-                                >
-                                  Back
-                                </button>
-                              </div>
-
-                              <div>
-                                <label className="block text-[10px] text-on-surface-variant mb-1">GTM Account</label>
-                                <select
-                                  value={selectedAccount}
-                                  onChange={(e) => setSelectedAccount(e.target.value)}
-                                  className="w-full bg-surface-container text-white text-sm p-2 rounded border border-surface-bright focus:border-secondary focus:outline-none"
-                                >
-                                  <option value="">Select account...</option>
-                                  {gtmAccounts.map((account) => (
-                                    <option key={account.path} value={account.path}>
-                                      {account.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-
-                              <div>
-                                <label className="block text-[10px] text-on-surface-variant mb-1">Container Name</label>
-                                <input
-                                  type="text"
-                                  value={newContainerName}
-                                  onChange={(e) => setNewContainerName(e.target.value)}
-                                  placeholder="My Server Container"
-                                  className="w-full bg-surface-container text-white text-sm p-2 rounded border border-surface-bright focus:border-secondary focus:outline-none"
-                                />
-                              </div>
-
-                              <button
-                                onClick={async () => {
-                                  if (!selectedAccount || !newContainerName) {
-                                    alert('Please select an account and enter a container name');
-                                    return;
-                                  }
-
-                                  setIsCreatingContainer(true);
-                                  addLog(`Creating server container: ${newContainerName}...`);
-
-                                  try {
-                                    const gtmSessionId = getGtmSession();
-                                    if (!gtmSessionId) {
-                                      throw new Error('No GTM session found');
-                                    }
-
-                                    const response = await fetch(`${getApiBaseUrl()}/gtm/create-server-container`, {
-                                      method: 'POST',
-                                      headers: {
-                                        'Content-Type': 'application/json',
-                                        'x-gtm-session': gtmSessionId
-                                      },
-                                      body: JSON.stringify({
-                                        accountPath: selectedAccount,
-                                        name: newContainerName,
-                                        importId: run?.importId
-                                      })
-                                    });
-
-                                    if (!response.ok) {
-                                      const error = await response.json();
-                                      throw new Error(error.message || 'Failed to create container');
-                                    }
-
-                                    const result = await response.json();
-                                    setServerContainerPath(result.path);
-                                    addLog(`✅ Created server container: ${result.publicId}`);
-                                  } catch (error: any) {
-                                    addLog(`❌ Failed to create container: ${error.message}`);
-                                    alert(`Failed to create container: ${error.message}`);
-                                  } finally {
-                                    setIsCreatingContainer(false);
-                                  }
-                                }}
-                                disabled={isCreatingContainer || !selectedAccount || !newContainerName}
-                                className={`w-full p-3 rounded text-sm font-bold transition-all ${
-                                  isCreatingContainer || !selectedAccount || !newContainerName
-                                    ? 'bg-surface-container text-on-surface-variant cursor-not-allowed'
-                                    : 'bg-primary text-on-primary hover:brightness-110'
-                                }`}
-                              >
-                                {isCreatingContainer ? (
-                                  <span className="flex items-center justify-center gap-2">
-                                    <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                                    Creating container...
-                                  </span>
-                                ) : (
-                                  <span className="flex items-center justify-center gap-2">
-                                    <span className="material-symbols-outlined text-sm">add</span>
-                                    Create Server Container
-                                  </span>
-                                )}
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between mb-2">
-                                <label className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">
-                                  Select Server Container
-                                </label>
-                                <button
-                                  onClick={() => {
-                                    setContainerMode(null);
-                                    setServerContainers([]);
-                                  }}
-                                  className="text-xs text-on-surface-variant hover:text-white"
-                                >
-                                  Back
-                                </button>
-                              </div>
-
-                              <select
-                                value={serverContainerPath}
-                                onChange={(e) => setServerContainerPath(e.target.value)}
-                                className="w-full bg-surface-container text-white text-sm p-3 rounded border border-surface-bright focus:border-secondary focus:outline-none"
-                              >
-                                <option value="">Choose a server container...</option>
-                                {serverContainers.map((container) => (
-                                  <option key={container.path} value={container.path}>
-                                    {container.name} ({container.publicId})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-1 gap-3">
-                          <button
-                            onClick={async () => {
-                              setIsDeploying(true);
-                              addLog(`🚀 Starting deployment of ${approvedTags.size} approved tags...`);
-
-                              try {
-                                const gtmSessionId = getGtmSession();
-                                if (!gtmSessionId) {
-                                  throw new Error('No GTM session found. Please reconnect to Google Tag Manager.');
-                                }
-
-                                const result = await apiClient.deployApprovedTags(
-                                  runId,
-                                  Array.from(approvedTags),
-                                  serverContainerPath,
-                                  gtmSessionId
-                                );
-
-                                processDeploymentResult(result);
-                                addLog(`✅ Deployment complete: ${result.deployed} tags deployed, ${result.failed} failed`);
-
-                                // Log detailed errors to console for debugging
-                                if (result.errors && result.errors.length > 0) {
-                                  console.error('Deployment errors:', result.errors);
-                                  result.errors.forEach((err: any) => {
-                                    console.error(`Tag "${err.clientTagName}" failed:`, err.error);
-                                  });
-                                }
-                              } catch (error: any) {
-                                addLog(`❌ Deployment failed: ${error.message}`);
-                                alert(`Deployment failed: ${error.message}\n\nPlease ensure you're connected to Google Tag Manager and have the correct permissions.`);
-                              } finally {
-                                setIsDeploying(false);
-                              }
-                            }}
-                            disabled={isDeploying || !serverContainerPath}
-                            className={`w-full p-4 rounded-lg font-bold transition-all flex items-center justify-center gap-3 ${
-                              isDeploying || !serverContainerPath
-                                ? 'bg-surface-container text-on-surface-variant cursor-not-allowed'
-                                : 'bg-secondary text-on-primary hover:brightness-110'
-                            }`}
-                          >
-                            {isDeploying ? (
-                              <>
-                                <span className="material-symbols-outlined text-2xl animate-spin">progress_activity</span>
-                                <div className="text-left">
-                                  <div className="text-sm">Deploying Tags...</div>
-                                  <div className="text-[10px] opacity-80">Creating tags in GTM</div>
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <span className="material-symbols-outlined text-2xl">cloud_upload</span>
-                                <div className="text-left">
-                                  <div className="text-sm">Deploy to Server Container</div>
-                                  <div className="text-[10px] opacity-80">Automatically create {approvedTags.size} tags</div>
-                                </div>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      )}
-
-                      {skippedTags.size > 0 && (
-                        <div className="mt-4 p-3 bg-surface-container-low rounded-lg border border-outline-variant/20">
-                          <p className="text-xs text-on-surface-variant">
-                            <span className="material-symbols-outlined text-sm align-middle mr-1">info</span>
-                            You have {skippedTags.size} skipped tag{skippedTags.size !== 1 ? 's' : ''} that can be migrated separately in a future iteration.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Deployment Results */}
-              {deploymentResult && (
-                <div className="bg-gradient-to-r from-primary/10 to-secondary/10 border border-primary/20 rounded-xl p-6 mb-6">
-                  <div className="flex items-start gap-4">
-                    <div className="bg-primary/20 p-3 rounded-lg">
-                      <span className="material-symbols-outlined text-primary text-2xl">description</span>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-bold text-white mb-2">Implementation Guide Generated</h3>
-
-                      {/* API Limitation Notice */}
-                      {deploymentResult.apiLimitation && (
-                        <div className="bg-[#ffb4a7]/10 border border-[#ffb4a7]/20 p-4 rounded-lg mb-4">
-                          <div className="flex items-start gap-2 mb-2">
-                            <span className="material-symbols-outlined text-[#ffb4a7] text-sm mt-0.5">info</span>
-                            <div className="flex-1">
-                              <div className="text-xs font-bold text-white mb-1">GTM API Limitation</div>
-                              <div className="text-[11px] text-on-surface-variant mb-2">
-                                {deploymentResult.apiLimitation.explanation}
-                              </div>
-                              <div className="text-[11px] text-on-surface">
-                                <strong>Solution:</strong> {deploymentResult.apiLimitation.solution}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      <p className="text-sm text-on-surface-variant mb-4">
-                        Generated implementation guides for {deploymentResult.guideGenerated} tag{deploymentResult.guideGenerated !== 1 ? 's' : ''}.
-                        Follow the steps below to manually add tags to your server-side container.
-                      </p>
-
-                      {/* Implementation Guide */}
-                      {deploymentResult.implementationGuide && deploymentResult.implementationGuide.length > 0 && (
-                        <div className="space-y-4 mb-4 max-h-[500px] overflow-y-auto custom-scrollbar">
-                          {deploymentResult.implementationGuide.map((guide: any, idx: number) => (
-                            <div key={guide.clientTagId || idx} className="bg-surface-container border border-outline-variant/10 p-4 rounded-lg">
-                              <div className="flex items-start gap-3 mb-3">
-                                <div className="bg-primary/20 p-2 rounded">
-                                  <span className="material-symbols-outlined text-primary text-base">sell</span>
-                                </div>
-                                <div className="flex-1">
-                                  <h5 className="text-sm font-bold text-white mb-1">{guide.tagName}</h5>
-                                  <div className="text-[10px] text-on-surface-variant mb-2">
-                                    <strong>Template:</strong> {guide.templateInfo?.templateName} <br />
-                                    <strong>Source:</strong> {guide.templateInfo?.templateSource}
-                                  </div>
-                                </div>
-                              </div>
-
-                              {guide.templateInfo?.steps && (
-                                <div className="bg-surface-container-low p-3 rounded">
-                                  <h6 className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Implementation Steps</h6>
-                                  <ol className="space-y-1.5 text-[11px] text-on-surface list-decimal list-inside">
-                                    {guide.templateInfo.steps.map((step: string, stepIdx: number) => (
-                                      <li key={stepIdx} className="leading-relaxed">{step}</li>
-                                    ))}
-                                  </ol>
-                                </div>
-                              )}
-
-                              {guide.recommendation && (
-                                <details className="mt-3">
-                                  <summary className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant cursor-pointer hover:text-white transition-colors">
-                                    View Original Recommendation
-                                  </summary>
-                                  <div className="mt-2 text-[10px] text-on-surface-variant bg-surface-container-lowest p-3 rounded font-mono whitespace-pre-wrap">
-                                    {guide.recommendation}
-                                  </div>
-                                </details>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Next Steps */}
-                      <div className="bg-surface-container-low p-4 rounded-lg">
-                        <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-3">Next Steps</h4>
-                        <ol className="space-y-2 text-sm text-on-surface list-decimal list-inside">
-                          {deploymentResult.nextSteps?.map((step: string, idx: number) => (
-                            <li key={idx}>{step}</li>
-                          ))}
-                        </ol>
-                      </div>
-
-                      <button
-                        onClick={() => setDeploymentResult(null)}
-                        className="mt-4 px-4 py-2 bg-surface-container-highest text-white rounded-lg text-xs font-bold hover:bg-surface-bright transition-all"
-                      >
-                        Close Guide
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-12 gap-6 min-h-[600px]">
-              {/* Left Sidebar: Detected Elements */}
-              <aside className="col-span-12 lg:col-span-4 xl:col-span-3">
-                <div className="bg-surface-container-low rounded-lg overflow-hidden border border-outline-variant/10 flex flex-col h-full">
-                  {/* Header */}
-                  <div className="px-4 py-3 border-b border-outline-variant/10 bg-surface-container-high/50">
-                    <div className="flex justify-between items-center mb-3">
-                      <h2 className="font-label text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-                        Container Elements
-                      </h2>
-                      <span className="text-[10px] font-mono text-white bg-white/10 px-2 py-0.5 rounded-full border border-white/5">
-                        {filteredElements.length}
-                      </span>
-                    </div>
-
-                    {/* Deployment Status Tabs */}
-                    <div className="grid grid-cols-2 gap-1 mb-3 p-1 bg-surface-container-lowest rounded-lg">
-                      <button
-                        onClick={() => setDeploymentFilter('active')}
-                        className={`px-2 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
-                          deploymentFilter === 'active'
-                            ? 'bg-secondary text-on-primary shadow-sm'
-                            : 'text-on-surface-variant hover:text-white'
-                        }`}
-                      >
-                        <span className="material-symbols-outlined text-xs">pending_actions</span>
-                        Active ({allElements.filter(e => !deployedTags.has(e.id) && !skippedTags.has(e.id)).length})
-                      </button>
-                      <button
-                        onClick={() => setDeploymentFilter('deployed')}
-                        className={`px-2 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
-                          deploymentFilter === 'deployed'
-                            ? 'bg-secondary text-on-primary shadow-sm'
-                            : 'text-on-surface-variant hover:text-white'
-                        }`}
-                      >
-                        <span className="material-symbols-outlined text-xs">check_circle</span>
-                        Deployed ({deployedTags.size})
-                      </button>
-                    </div>
-
-                    {/* Element Type Tabs */}
-                    <div className="grid grid-cols-4 gap-1 mb-3 p-1 bg-surface-container-lowest rounded-lg">
-                      <button
-                        onClick={() => setElementTypeFilter('tag')}
-                        className={`px-2 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
-                          elementTypeFilter === 'tag'
-                            ? 'bg-primary text-on-primary shadow-sm'
-                            : 'text-on-surface-variant hover:text-white'
-                        }`}
-                      >
-                        <span className="material-symbols-outlined text-xs">sell</span>
-                        Tags
-                      </button>
-                      <button
-                        onClick={() => setElementTypeFilter('trigger')}
-                        className={`px-2 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
-                          elementTypeFilter === 'trigger'
-                            ? 'bg-primary text-on-primary shadow-sm'
-                            : 'text-on-surface-variant hover:text-white'
-                        }`}
-                      >
-                        <span className="material-symbols-outlined text-xs">bolt</span>
-                        Triggers
-                      </button>
-                      <button
-                        onClick={() => setElementTypeFilter('variable')}
-                        className={`px-2 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
-                          elementTypeFilter === 'variable'
-                            ? 'bg-primary text-on-primary shadow-sm'
-                            : 'text-on-surface-variant hover:text-white'
-                        }`}
-                      >
-                        <span className="material-symbols-outlined text-xs">data_object</span>
-                        Vars
-                      </button>
-                      <button
-                        onClick={() => setElementTypeFilter('all')}
-                        className={`px-2 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider transition-all ${
-                          elementTypeFilter === 'all'
-                            ? 'bg-primary text-on-primary shadow-sm'
-                            : 'text-on-surface-variant hover:text-white'
-                        }`}
-                      >
-                        All
-                      </button>
-                    </div>
-
-                    {/* Status Legend (only for tags) */}
-                    {elementTypeFilter === 'tag' && (
-                      <div className="flex gap-2 flex-wrap">
-                        <div className="flex items-center gap-1">
-                          <div className="w-2 h-2 rounded-full bg-secondary"></div>
-                          <span className="text-[9px] text-on-surface-variant uppercase font-label">Ready</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-2 h-2 rounded-full bg-[#F63A22]"></div>
-                          <span className="text-[9px] text-on-surface-variant uppercase font-label">Review</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-2 h-2 rounded-full bg-error"></div>
-                          <span className="text-[9px] text-on-surface-variant uppercase font-label">Manual</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Search & Show Skipped Toggle */}
-                  <div className="px-3 py-2 border-b border-outline-variant/10 bg-surface-container-lowest/50 space-y-2">
-                    <div className="flex items-center bg-surface-container-highest/50 border border-white/5 rounded px-2 py-1.5">
-                      <span className="material-symbols-outlined text-xs text-on-surface-variant">search</span>
-                      <input
-                        className="bg-transparent border-none p-0 ml-2 text-xs text-on-surface focus:ring-0 w-full font-label placeholder-on-surface-variant/50"
-                        placeholder="Search..."
-                        type="text"
-                        value={filterText}
-                        onChange={(e) => setFilterText(e.target.value)}
-                      />
-                    </div>
-                    {skippedTags.size > 0 && (
-                      <button
-                        onClick={() => setShowSkipped(!showSkipped)}
-                        className={`w-full px-2 py-1.5 rounded text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
-                          showSkipped
-                            ? 'bg-surface-variant/20 text-on-surface border border-surface-variant/30'
-                            : 'bg-surface-container-highest/50 text-on-surface-variant hover:text-white'
-                        }`}
-                      >
-                        <span className="material-symbols-outlined text-xs">
-                          {showSkipped ? 'visibility' : 'visibility_off'}
-                        </span>
-                        {showSkipped ? 'Hide' : 'Show'} Skipped ({skippedTags.size})
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Elements List */}
-                  <div className="flex-grow overflow-y-auto custom-scrollbar p-2 space-y-1">
-                    {filteredElements.length === 0 ? (
-                      <div className="text-center py-8 text-on-surface-variant text-sm">
-                        No elements found
-                      </div>
-                    ) : (
-                      filteredElements.map((element) => {
-                        const isSkipped = skippedTags.has(element.id);
-                        return (
-                        <div
-                          key={element.id}
-                          onClick={() => {
-                            setSelectedElement(element);
-                            if (element.elementType === 'tag') {
-                              const mapping = report.mappings.find((m: MappingRecord) => m.clientTagId === element.id);
-                              setSelectedMapping(mapping || null);
-                            } else {
-                              setSelectedMapping(null);
-                            }
-                            addLog(`Selected: ${element.name} (${element.elementType})`);
-                          }}
-                          className={`p-3 rounded-md flex items-center gap-3 cursor-pointer transition-all ${
-                            isSkipped ? 'opacity-50' : ''
-                          } ${
-                            selectedElement?.id === element.id
-                              ? 'bg-gradient-to-r from-primary/10 to-transparent border-l-2 border-primary ring-1 ring-inset ring-white/5'
-                              : 'hover:bg-white/5 border border-transparent hover:border-white/5'
-                          }`}
-                        >
-                          <div className={`w-9 h-9 rounded flex items-center justify-center ${
-                            selectedElement?.id === element.id
-                              ? 'bg-primary/20 text-primary'
-                              : 'bg-surface-variant/50 text-on-surface-variant'
-                          }`}>
-                            <span className="material-symbols-outlined text-xl">
-                              {element.elementType === 'tag' ? getIconForTagType(element.type) :
-                               element.elementType === 'trigger' ? 'bolt' : 'data_object'}
-                            </span>
-                          </div>
-                          <div className="flex-grow min-w-0">
-                            <div className="flex items-center gap-1.5 mb-0.5">
-                              <div className={`text-sm font-bold truncate ${
-                                selectedElement?.id === element.id ? 'text-white' : 'text-on-surface'
-                              }`}>
-                                {element.name}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-[8px] px-1.5 py-0.5 rounded bg-white/5 text-on-surface-variant font-bold uppercase tracking-tighter border border-white/10 whitespace-nowrap">
-                                {element.type}
-                              </span>
-                              {element.elementType === 'tag' && (() => {
-                                const mapping = report.mappings.find((m: MappingRecord) => m.clientTagId === element.id);
-                                if (mapping?.evidence?.type === 'agent_web') {
-                                  return (
-                                    <span className="text-[7px] px-1 py-0.5 rounded bg-[#9c27b0]/10 text-[#ce93d8] font-bold uppercase tracking-wider border border-[#9c27b0]/30 whitespace-nowrap flex items-center gap-0.5">
-                                      <span className="material-symbols-outlined" style={{ fontSize: '8px' }}>psychology</span>
-                                      AI
-                                    </span>
-                                  );
-                                }
-                                return null;
-                              })()}
-                            </div>
-                          </div>
-                          <div className="flex flex-col gap-1 items-end">
-                            {approvedTags.has(element.id) && (
-                              <div className="px-2 py-1 rounded text-[9px] font-black border bg-secondary/10 text-secondary border-secondary/30 flex items-center gap-1">
-                                <span className="material-symbols-outlined text-[12px]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
-                                APPROVED
-                              </div>
-                            )}
-                            {isSkipped && (
-                              <div className="px-2 py-1 rounded text-[9px] font-black border bg-surface-variant/20 text-on-surface-variant border-surface-variant/30 flex items-center gap-1">
-                                <span className="material-symbols-outlined text-[12px]">visibility_off</span>
-                                SKIPPED
-                              </div>
-                            )}
-                            {element.status && (
-                              <div className={`px-2 py-1 rounded text-[9px] font-black border flex items-center gap-1 ${getStatusColor(element.status)}`}>
-                                <span className="material-symbols-outlined text-[12px]" style={{ fontVariationSettings: element.status === 'ready' ? "'FILL' 1" : "'FILL' 0" }}>
-                                  {getStatusIcon(element.status)}
-                                </span>
-                                {getStatusText(element.status)}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                      })
-                    )}
-                  </div>
-                </div>
-              </aside>
-
-              {/* Center: Mapping Details */}
-              <section className="col-span-12 lg:col-span-5 xl:col-span-6">
-                <div className="bg-surface-container rounded-lg border border-outline-variant/10 overflow-hidden flex flex-col h-full">
-                  {/* Editor Header */}
-                  <div className="bg-surface-container-high px-6 py-4 border-b border-outline-variant/10">
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex items-center gap-3 flex-1">
-                        <div className="bg-primary/20 p-2 rounded text-primary">
-                          <span className="material-symbols-outlined text-xl">settings_ethernet</span>
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="text-lg font-bold text-white tracking-tight mb-1">
-                            {selectedElement?.name || 'Select a tag'}
-                          </h3>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="text-[10px] text-on-surface-variant font-label uppercase">
-                              {selectedMapping ? `Confidence: ${selectedMapping.confidence.toFixed(1)}/10` : 'No mapping available'}
-                            </p>
-                            {selectedMapping && (
-                              <>
-                                <span className="text-on-surface-variant/30">•</span>
-                                {selectedMapping.evidence?.type === 'agent_web' ? (
-                                  <div className="flex items-center gap-1 bg-[#9c27b0]/10 border border-[#9c27b0]/30 px-2 py-0.5 rounded text-[10px] font-bold text-[#ce93d8] uppercase tracking-wider">
-                                    <span className="material-symbols-outlined text-xs">psychology</span>
-                                    AI-Enhanced
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-1 bg-secondary/10 border border-secondary/30 px-2 py-0.5 rounded text-[10px] font-bold text-secondary uppercase tracking-wider">
-                                    <span className="material-symbols-outlined text-xs">book</span>
-                                    Rule-Based
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      {selectedMapping && (
-                        <div className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${
-                          selectedMapping.confidence >= 8.5 ? 'bg-secondary/10 text-secondary' :
-                          selectedMapping.confidence >= 6 ? 'bg-[#F63A22]/10 text-[#F63A22]' :
-                          'bg-error/10 text-error'
-                        }`}>
-                          {selectedMapping.provisional ? 'PROVISIONAL' : 'VERIFIED'}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Content */}
-                  <div className="p-6 flex-grow space-y-6 overflow-y-auto custom-scrollbar">
-                    {!selectedElement ? (
-                      <div className="text-center py-12 text-on-surface-variant">
-                        Select an element from the left to view details
-                      </div>
-                    ) : selectedElement.elementType === 'trigger' ? (
-                      <>
-                        {/* Trigger Details */}
-                        <div className="bg-[#ffb4a7]/5 border border-[#ffb4a7]/20 p-4 rounded-lg">
-                          <div className="flex items-start gap-3 mb-3">
-                            <span className="material-symbols-outlined text-[#ffb4a7] text-xl">bolt</span>
-                            <div>
-                              <p className="text-xs font-bold text-white mb-1">Trigger Overview</p>
-                              <p className="text-[10px] text-on-surface-variant">
-                                This trigger defines when tags should fire. Triggers stay client-side but are referenced in server-side tag configurations.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="block text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest">
-                            Trigger Configuration
-                          </label>
-                          <div className="bg-surface-container-highest p-4 rounded">
-                            <pre className="text-xs text-on-surface leading-relaxed whitespace-pre-wrap font-mono">
-                              {JSON.stringify(selectedElement.details, null, 2)}
-                            </pre>
-                          </div>
-                        </div>
-
-                        <div className="bg-secondary/5 border border-secondary/10 p-4 rounded-lg">
-                          <p className="text-xs text-on-surface leading-relaxed">
-                            <span className="font-bold">Migration Note:</span> Triggers remain in your client-side container.
-                            When tags fire based on this trigger, events will be forwarded to your server container automatically.
-                          </p>
-                        </div>
-                      </>
-                    ) : selectedElement.elementType === 'variable' ? (
-                      <>
-                        {/* Variable Details */}
-                        <div className="bg-[#ffb4a7]/5 border border-[#ffb4a7]/20 p-4 rounded-lg">
-                          <div className="flex items-start gap-3 mb-3">
-                            <span className="material-symbols-outlined text-[#ffb4a7] text-xl">data_object</span>
-                            <div>
-                              <p className="text-xs font-bold text-white mb-1">Variable Overview</p>
-                              <p className="text-[10px] text-on-surface-variant">
-                                Variables need to be manually recreated in your server-side container to access their values server-side.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="block text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest">
-                            Variable Configuration
-                          </label>
-                          <div className="bg-surface-container-highest p-4 rounded">
-                            <pre className="text-xs text-on-surface leading-relaxed whitespace-pre-wrap font-mono">
-                              {JSON.stringify(selectedElement.details, null, 2)}
-                            </pre>
-                          </div>
-                        </div>
-
-                        <div className="bg-[#F63A22]/5 border border-[#F63A22]/20 p-4 rounded-lg">
-                          <div className="flex items-start gap-3">
-                            <span className="material-symbols-outlined text-[#F63A22]">warning</span>
-                            <div>
-                              <p className="text-xs font-bold text-white mb-2">Action Required</p>
-                              <ol className="text-xs text-on-surface space-y-1 list-decimal list-inside">
-                                <li>Open your server-side GTM container</li>
-                                <li>Create a new variable with the same name and type</li>
-                                <li>Configure it to read from the appropriate server-side source (event data, cookies, headers, etc.)</li>
-                                <li>Test in GTM preview mode to verify the value is accessible</li>
-                              </ol>
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    ) : !selectedMapping ? (
-                      <div className="text-center py-12">
-                        <span className="material-symbols-outlined text-4xl text-on-surface-variant mb-4">warning</span>
-                        <p className="text-on-surface-variant">No mapping available for this tag</p>
-                      </div>
-                    ) : (
-                      <>
-                        {/* What You Need to Do - Status-specific guidance */}
-                        <div className={`p-4 rounded-lg border-2 ${
-                          selectedElement.status === 'ready'
-                            ? 'bg-secondary/5 border-secondary/30'
-                            : selectedElement.status === 'mapping'
-                            ? 'bg-[#F63A22]/5 border-[#F63A22]/30'
-                            : 'bg-error/5 border-error/30'
-                        }`}>
-                          <div className="flex items-start gap-3 mb-3">
-                            <span className={`material-symbols-outlined text-2xl ${
-                              selectedElement.status === 'ready' ? 'text-secondary' :
-                              selectedElement.status === 'mapping' ? 'text-[#F63A22]' : 'text-error'
-                            }`} style={{ fontVariationSettings: "'FILL' 1" }}>
-                              {selectedElement.status === 'ready' ? 'check_circle' :
-                               selectedElement.status === 'mapping' ? 'edit_note' : 'warning'}
-                            </span>
-                            <div className="flex-1">
-                              <h4 className="text-sm font-bold text-white mb-1">
-                                {selectedElement.status === 'ready' ? '✓ Ready for Deployment' :
-                                 selectedElement.status === 'mapping' ? '⚠️ Review Required' : '🚨 Manual Configuration Needed'}
-                              </h4>
-                              <p className="text-xs text-on-surface-variant leading-relaxed mb-3">
-                                {selectedElement.status === 'ready'
-                                  ? 'This tag has been automatically mapped with high confidence. No action needed - it will be included in your server-side container.'
-                                  : selectedElement.status === 'mapping'
-                                  ? 'This tag needs your review. Check the recommendation below and verify it matches your tracking requirements.'
-                                  : 'This tag requires manual configuration. Follow the steps below to properly set up server-side tracking.'}
-                              </p>
-
-                              {/* Action buttons based on status */}
-                              <div className="flex gap-2 flex-wrap">
-                                {deployedTags.has(selectedElement.id) ? (
-                                  <div className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold bg-secondary/10 text-secondary border border-secondary/20">
-                                    <span
-                                      className="material-symbols-outlined text-sm"
-                                      style={{ fontVariationSettings: "'FILL' 1" }}
-                                    >
-                                      task_alt
-                                    </span>
-                                    Deployed
-                                  </div>
-                                ) : selectedElement.status === 'ready' ? (
-                                  <>
-                                    {approvedTags.has(selectedElement.id) ? (
-                                      <>
-                                        <button
-                                          onClick={() => {
-                                            setApprovedTags(prev => {
-                                              const next = new Set(prev);
-                                              next.delete(selectedElement.id);
-                                              return next;
-                                            });
-                                            addLog(`🔄 Unapproved tag: ${selectedElement.name}`);
-                                          }}
-                                          className="px-4 py-2 bg-secondary/20 text-secondary rounded-lg text-xs font-bold hover:bg-secondary/30 transition-all flex items-center gap-1"
-                                        >
-                                          <span className="material-symbols-outlined text-sm">undo</span>
-                                          Unapprove
-                                        </button>
-                                        {serverContainerPath && (
-                                          <button
-                                            onClick={async () => {
-                                              setIsDeploying(true);
-                                              addLog(`🚀 Deploying single tag: ${selectedElement.name}`);
-
-                                              try {
-                                                const gtmSessionId = getGtmSession();
-                                                if (!gtmSessionId) {
-                                                  throw new Error('No GTM session found. Please reconnect to Google Tag Manager.');
-                                                }
-
-                                                const result = await apiClient.deployApprovedTags(
-                                                  runId,
-                                                  [selectedElement.id],
-                                                  serverContainerPath,
-                                                  gtmSessionId
-                                                );
-
-                                                processDeploymentResult(result);
-                                                addLog(`✅ Deployment complete`);
-                                              } catch (error: any) {
-                                                addLog(`❌ Deployment failed: ${error.message}`);
-                                                alert(`Deployment failed: ${error.message}`);
-                                              } finally {
-                                                setIsDeploying(false);
-                                              }
-                                            }}
-                                            disabled={isDeploying}
-                                            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                                              isDeploying
-                                                ? 'bg-surface-container text-on-surface-variant cursor-not-allowed'
-                                                : 'bg-primary text-on-primary hover:brightness-110'
-                                            }`}
-                                          >
-                                            {isDeploying ? (
-                                              <>
-                                                <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                                                Deploying...
-                                              </>
-                                            ) : (
-                                              <>
-                                                <span className="material-symbols-outlined text-sm">cloud_upload</span>
-                                                Deploy This Tag
-                                              </>
-                                            )}
-                                          </button>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <button
-                                        onClick={() => {
-                                          setApprovedTags(prev => new Set(prev).add(selectedElement.id));
-                                          addLog(`✅ Approved tag: ${selectedElement.name}`);
-                                        }}
-                                        className="px-4 py-2 bg-secondary text-on-primary rounded-lg text-xs font-bold hover:brightness-110 transition-all flex items-center gap-1"
-                                      >
-                                        <span className="material-symbols-outlined text-sm">check</span>
-                                        Approve
-                                      </button>
-                                    )}
-                                  </>
-                                ) : selectedElement.status === 'mapping' ? (
-                                  <>
-                                    {approvedTags.has(selectedElement.id) ? (
-                                      <>
-                                        <button
-                                          onClick={() => {
-                                            setApprovedTags(prev => {
-                                              const next = new Set(prev);
-                                              next.delete(selectedElement.id);
-                                              return next;
-                                            });
-                                            addLog(`🔄 Unapproved mapping for: ${selectedElement.name}`);
-                                          }}
-                                          className="px-4 py-2 bg-secondary/20 text-secondary rounded-lg text-xs font-bold hover:bg-secondary/30 transition-all flex items-center gap-1"
-                                        >
-                                          <span className="material-symbols-outlined text-sm">undo</span>
-                                          Unapprove
-                                        </button>
-                                        {serverContainerPath && (
-                                          <button
-                                            onClick={async () => {
-                                              setIsDeploying(true);
-                                              addLog(`🚀 Deploying single tag: ${selectedElement.name}`);
-
-                                              try {
-                                                const gtmSessionId = getGtmSession();
-                                                if (!gtmSessionId) {
-                                                  throw new Error('No GTM session found. Please reconnect to Google Tag Manager.');
-                                                }
-
-                                                const result = await apiClient.deployApprovedTags(
-                                                  runId,
-                                                  [selectedElement.id],
-                                                  serverContainerPath,
-                                                  gtmSessionId
-                                                );
-
-                                                processDeploymentResult(result);
-                                                addLog(`✅ Deployment complete`);
-                                              } catch (error: any) {
-                                                addLog(`❌ Deployment failed: ${error.message}`);
-                                                alert(`Deployment failed: ${error.message}`);
-                                              } finally {
-                                                setIsDeploying(false);
-                                              }
-                                            }}
-                                            disabled={isDeploying}
-                                            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                                              isDeploying
-                                                ? 'bg-surface-container text-on-surface-variant cursor-not-allowed'
-                                                : 'bg-primary text-on-primary hover:brightness-110'
-                                            }`}
-                                          >
-                                            {isDeploying ? (
-                                              <>
-                                                <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                                                Deploying...
-                                              </>
-                                            ) : (
-                                              <>
-                                                <span className="material-symbols-outlined text-sm">cloud_upload</span>
-                                                Deploy This Tag
-                                              </>
-                                            )}
-                                          </button>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <button
-                                        onClick={() => {
-                                          setApprovedTags(prev => new Set(prev).add(selectedElement.id));
-                                          addLog(`✅ Approved mapping for: ${selectedElement.name}`);
-                                        }}
-                                        className="px-4 py-2 bg-secondary text-on-primary rounded-lg text-xs font-bold hover:brightness-110 transition-all flex items-center gap-1"
-                                      >
-                                        <span className="material-symbols-outlined text-sm">check</span>
-                                        Approve Mapping
-                                      </button>
-                                    )}
-                                    <button
-                                      onClick={() => {
-                                        console.log('Customize clicked', { selectedMapping, selectedElement });
-                                        if (selectedMapping && selectedElement) {
-                                          setIsEditing(true);
-                                          setEditedRecommendation(selectedMapping.serverRecommendation);
-                                          addLog(`✏️ Editing recommendation for: ${selectedElement.name}`);
-                                        } else {
-                                          console.error('Missing mapping or element', { selectedMapping, selectedElement });
-                                          addLog(`⚠️ Error: Cannot edit - mapping not found`);
-                                        }
-                                      }}
-                                      className="px-4 py-2 bg-surface-container-highest text-white rounded-lg text-xs font-bold hover:bg-surface-bright transition-all flex items-center gap-1"
-                                    >
-                                      <span className="material-symbols-outlined text-sm">edit</span>
-                                      Customize
-                                    </button>
-                                  </>
-                                ) : (
-                                  <>
-                                    {approvedTags.has(selectedElement.id) ? (
-                                      <>
-                                        <button
-                                          onClick={() => {
-                                            setApprovedTags(prev => {
-                                              const next = new Set(prev);
-                                              next.delete(selectedElement.id);
-                                              return next;
-                                            });
-                                            addLog(`🔄 Unapproved tag: ${selectedElement.name}`);
-                                          }}
-                                          className="px-4 py-2 bg-secondary/20 text-secondary rounded-lg text-xs font-bold hover:bg-secondary/30 transition-all flex items-center gap-1"
-                                        >
-                                          <span className="material-symbols-outlined text-sm">undo</span>
-                                          Unapprove
-                                        </button>
-                                        {serverContainerPath && (
-                                          <button
-                                            onClick={async () => {
-                                              setIsDeploying(true);
-                                              addLog(`🚀 Deploying single tag: ${selectedElement.name}`);
-
-                                              try {
-                                                const gtmSessionId = getGtmSession();
-                                                if (!gtmSessionId) {
-                                                  throw new Error('No GTM session found. Please reconnect to Google Tag Manager.');
-                                                }
-
-                                                const result = await apiClient.deployApprovedTags(
-                                                  runId,
-                                                  [selectedElement.id],
-                                                  serverContainerPath,
-                                                  gtmSessionId
-                                                );
-
-                                                processDeploymentResult(result);
-                                                addLog(`✅ Deployment complete`);
-                                              } catch (error: any) {
-                                                addLog(`❌ Deployment failed: ${error.message}`);
-                                                alert(`Deployment failed: ${error.message}`);
-                                              } finally {
-                                                setIsDeploying(false);
-                                              }
-                                            }}
-                                            disabled={isDeploying}
-                                            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                                              isDeploying
-                                                ? 'bg-surface-container text-on-surface-variant cursor-not-allowed'
-                                                : 'bg-primary text-on-primary hover:brightness-110'
-                                            }`}
-                                          >
-                                            {isDeploying ? (
-                                              <>
-                                                <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                                                Deploying...
-                                              </>
-                                            ) : (
-                                              <>
-                                                <span className="material-symbols-outlined text-sm">cloud_upload</span>
-                                                Deploy This Tag
-                                              </>
-                                            )}
-                                          </button>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <button
-                                        onClick={() => {
-                                          setApprovedTags(prev => new Set(prev).add(selectedElement.id));
-                                          addLog(`✅ Approved tag (manual config): ${selectedElement.name}`);
-                                        }}
-                                        className="px-4 py-2 bg-secondary text-on-primary rounded-lg text-xs font-bold hover:brightness-110 transition-all flex items-center gap-1"
-                                      >
-                                        <span className="material-symbols-outlined text-sm">check</span>
-                                        Approve
-                                      </button>
-                                    )}
-                                    <button className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-bold hover:brightness-110 transition-all flex items-center gap-1">
-                                      <span className="material-symbols-outlined text-sm">build</span>
-                                      Configure Manually
-                                    </button>
-                                    <button className="px-4 py-2 bg-surface-container-highest text-white rounded-lg text-xs font-bold hover:bg-surface-bright transition-all flex items-center gap-1">
-                                      <span className="material-symbols-outlined text-sm">help</span>
-                                      Get Help
-                                    </button>
-                                  </>
-                                )}
-
-                                {/* Skip/Unskip button for all statuses */}
-                                {skippedTags.has(selectedElement.id) ? (
-                                  <button
-                                    onClick={() => {
-                                      setSkippedTags(prev => {
-                                        const next = new Set(prev);
-                                        next.delete(selectedElement.id);
-                                        return next;
-                                      });
-                                      addLog(`↩️ Unskipped tag: ${selectedElement.name}`);
-                                    }}
-                                    className="px-4 py-2 bg-secondary/20 text-secondary rounded-lg text-xs font-bold hover:bg-secondary/30 transition-all flex items-center gap-1"
-                                  >
-                                    <span className="material-symbols-outlined text-sm">undo</span>
-                                    Unskip This Tag
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => {
-                                      setSkippedTags(prev => new Set(prev).add(selectedElement.id));
-                                      addLog(`⏭️ Skipped tag: ${selectedElement.name}`);
-                                      setSelectedElement(null);
-                                      setSelectedMapping(null);
-                                    }}
-                                    className="px-4 py-2 bg-surface-container-highest text-on-surface-variant rounded-lg text-xs font-bold hover:bg-surface-bright transition-all flex items-center gap-1"
-                                  >
-                                    <span className="material-symbols-outlined text-sm">skip_next</span>
-                                    Skip This Tag
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Original GTM Tag Configuration */}
-                        <div className="space-y-2">
-                          <label className="block text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest">
-                            Original GTM Configuration
-                          </label>
-                          <div className="bg-surface-container-highest p-4 rounded space-y-3">
-                            {/* Tag Type */}
-                            <div>
-                              <span className="text-on-surface-variant text-[10px] uppercase tracking-wide font-bold">Tag Type</span>
-                              <p className="text-white text-sm font-mono mt-1">{selectedElement.type}</p>
-                            </div>
-
-                            {/* Category */}
-                            <div>
-                              <span className="text-on-surface-variant text-[10px] uppercase tracking-wide font-bold">Category</span>
-                              <p className="text-white text-sm mt-1">{(selectedElement.details as DetectedTag).category}</p>
-                            </div>
-
-                            {/* Firing Triggers */}
-                            <div>
-                              <span className="text-on-surface-variant text-[10px] uppercase tracking-wide font-bold">Firing Triggers</span>
-                              <p className="text-white text-xs mt-1 leading-relaxed">{(selectedElement.details as DetectedTag).triggerSummary || 'No triggers'}</p>
-                            </div>
-
-                            {/* Parameters */}
-                            <div>
-                              <span className="text-on-surface-variant text-[10px] uppercase tracking-wide font-bold mb-2 block">Configuration Parameters</span>
-                              {(selectedElement.details as DetectedTag).parameters && Object.keys((selectedElement.details as DetectedTag).parameters || {}).length > 0 ? (
-                                <div className="bg-surface-container p-3 rounded space-y-2">
-                                  {Object.entries((selectedElement.details as DetectedTag).parameters || {}).map(([key, value]) => (
-                                    <div key={key} className="flex items-start gap-3 text-xs">
-                                      <span className="text-secondary font-mono font-bold min-w-[120px]">{key}</span>
-                                      <span className="text-on-surface flex-1 break-words">{value}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="bg-[#F63A22]/5 border border-[#F63A22]/20 p-3 rounded text-xs text-on-surface-variant">
-                                  Parameter details not available in this report. Re-run the migration to see full GTM configuration.
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Server Recommendation */}
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <label className="block text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest">
-                              Server-Side Recommendation
-                            </label>
-                            <div className="flex gap-2">
-                              {isEditing ? (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      // Save changes
-                                      if (selectedMapping && report && selectedElement) {
-                                        const newRecommendation = buildRecommendation(
-                                          editServerTagName,
-                                          editConfigSteps,
-                                          editValidationNotes
-                                        );
-                                        const updatedMappings = report.mappings.map((m: MappingRecord) =>
-                                          m.clientTagId === selectedElement.id
-                                            ? { ...m, serverRecommendation: newRecommendation }
-                                            : m
-                                        );
-                                        setReport({ ...report, mappings: updatedMappings });
-                                        setSelectedMapping({ ...selectedMapping, serverRecommendation: newRecommendation });
-                                        setIsEditing(false);
-                                        addLog(`✓ Updated recommendation for: ${selectedElement.name}`);
-                                      }
-                                    }}
-                                    className="px-3 py-1 bg-secondary text-on-primary rounded text-[10px] font-bold hover:brightness-110 transition-all"
-                                  >
-                                    Save
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setIsEditing(false);
-                                      addLog(`Cancelled edit for: ${selectedElement.name}`);
-                                    }}
-                                    className="px-3 py-1 bg-surface-container-highest text-white rounded text-[10px] font-bold hover:bg-surface-bright transition-all"
-                                  >
-                                    Cancel
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setIsEditing(true);
-                                    const parsed = parseRecommendation(selectedMapping.serverRecommendation);
-                                    setEditServerTagName(parsed.tagName);
-                                    setEditConfigSteps(parsed.configSteps);
-                                    setEditValidationNotes(parsed.validationNotes);
-                                    addLog(`✏️ Editing recommendation for: ${selectedElement.name}`);
-                                  }}
-                                  className="px-3 py-1 bg-surface-container-highest text-white rounded text-[10px] font-bold hover:bg-surface-bright transition-all flex items-center gap-1"
-                                >
-                                  <span className="material-symbols-outlined text-sm">edit</span>
-                                  Edit
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          <div className="bg-surface-container-highest p-4 rounded">
-                            {isEditing ? (
-                              <div className="space-y-4">
-                                {/* Server Tag Name */}
-                                <div>
-                                  <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-2 block">
-                                    Server Tag Description
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={editServerTagName}
-                                    onChange={(e) => setEditServerTagName(e.target.value)}
-                                    className="w-full bg-surface-container text-white text-sm p-2 rounded border border-surface-bright focus:border-secondary focus:outline-none"
-                                    placeholder="e.g., Server-side Meta CAPI tag with hashed PII"
-                                  />
-                                </div>
-
-                                {/* Configuration Steps */}
-                                <div>
-                                  <div className="flex items-center justify-between mb-2">
-                                    <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">
-                                      Configuration Steps
-                                    </label>
-                                    <button
-                                      onClick={() => setEditConfigSteps([...editConfigSteps, ''])}
-                                      className="px-2 py-1 bg-primary/20 text-primary rounded text-[9px] font-bold hover:bg-primary/30 transition-all flex items-center gap-1"
-                                    >
-                                      <span className="material-symbols-outlined text-xs">add</span>
-                                      Add Step
-                                    </button>
-                                  </div>
-                                  <div className="space-y-2">
-                                    {editConfigSteps.map((step, index) => (
-                                      <div key={index} className="flex items-start gap-2">
-                                        <span className="text-primary text-sm mt-2">•</span>
-                                        <input
-                                          type="text"
-                                          value={step}
-                                          onChange={(e) => {
-                                            const newSteps = [...editConfigSteps];
-                                            newSteps[index] = e.target.value;
-                                            setEditConfigSteps(newSteps);
-                                          }}
-                                          className="flex-1 bg-surface-container text-on-surface text-xs p-2 rounded border border-surface-bright focus:border-secondary focus:outline-none"
-                                          placeholder="Enter configuration step..."
-                                        />
-                                        <button
-                                          onClick={() => {
-                                            const newSteps = editConfigSteps.filter((_, i) => i !== index);
-                                            setEditConfigSteps(newSteps);
-                                          }}
-                                          className="p-1.5 text-error hover:bg-error/10 rounded transition-all"
-                                        >
-                                          <span className="material-symbols-outlined text-sm">delete</span>
-                                        </button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-
-                                {/* Validation Notes */}
-                                <div>
-                                  <div className="flex items-center justify-between mb-2">
-                                    <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">
-                                      Validation Notes
-                                    </label>
-                                    <button
-                                      onClick={() => setEditValidationNotes([...editValidationNotes, ''])}
-                                      className="px-2 py-1 bg-primary/20 text-primary rounded text-[9px] font-bold hover:bg-primary/30 transition-all flex items-center gap-1"
-                                    >
-                                      <span className="material-symbols-outlined text-xs">add</span>
-                                      Add Note
-                                    </button>
-                                  </div>
-                                  <div className="space-y-2">
-                                    {editValidationNotes.map((note, index) => (
-                                      <div key={index} className="flex items-start gap-2">
-                                        <span className="text-[#F63A22] text-sm mt-2">⚠</span>
-                                        <input
-                                          type="text"
-                                          value={note}
-                                          onChange={(e) => {
-                                            const newNotes = [...editValidationNotes];
-                                            newNotes[index] = e.target.value;
-                                            setEditValidationNotes(newNotes);
-                                          }}
-                                          className="flex-1 bg-surface-container text-on-surface text-xs p-2 rounded border border-surface-bright focus:border-secondary focus:outline-none"
-                                          placeholder="Enter validation note..."
-                                        />
-                                        <button
-                                          onClick={() => {
-                                            const newNotes = editValidationNotes.filter((_, i) => i !== index);
-                                            setEditValidationNotes(newNotes);
-                                          }}
-                                          className="p-1.5 text-error hover:bg-error/10 rounded transition-all"
-                                        >
-                                          <span className="material-symbols-outlined text-sm">delete</span>
-                                        </button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <p className="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">
-                                {selectedMapping.serverRecommendation}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Evidence Source */}
-                        {selectedMapping.evidence && (
-                          <div className="space-y-2">
-                            <label className="block text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest">
-                              Evidence Source
-                            </label>
-                            {selectedMapping.evidence.type === 'docs' ? (
-                              <div className="bg-secondary/5 border border-secondary/20 p-4 rounded-lg">
-                                <div className="flex items-start gap-3">
-                                  <div className="bg-secondary/20 p-2 rounded">
-                                    <span className="material-symbols-outlined text-secondary text-lg">verified</span>
-                                  </div>
-                                  <div className="flex-1">
-                                    <p className="text-xs font-bold text-white mb-1">Official Documentation</p>
-                                    <p className="text-[10px] text-on-surface-variant mb-2">
-                                      This mapping is based on verified provider documentation and production rules.
-                                    </p>
-                                    <a
-                                      href={selectedMapping.evidence.ref}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="inline-flex items-center gap-1 text-[10px] text-secondary font-mono hover:underline"
-                                    >
-                                      <span className="material-symbols-outlined text-xs">link</span>
-                                      {selectedMapping.evidence.ref}
-                                    </a>
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="bg-[#9c27b0]/5 border border-[#9c27b0]/20 p-4 rounded-lg">
-                                <div className="flex items-start gap-3 mb-3">
-                                  <div className="bg-[#9c27b0]/20 p-2 rounded">
-                                    <span className="material-symbols-outlined text-[#ce93d8] text-lg">psychology</span>
-                                  </div>
-                                  <div className="flex-1">
-                                    <p className="text-xs font-bold text-white mb-1">AI-Enhanced Web Search</p>
-                                    <p className="text-[10px] text-on-surface-variant mb-2">
-                                      No dedicated rule was found. AI searched the web and synthesized recommendations from available documentation.
-                                    </p>
-                                    {selectedMapping.evidence.searchQuery && (
-                                      <div className="bg-surface-container-highest/50 p-2 rounded mb-2">
-                                        <p className="text-[9px] text-on-surface-variant uppercase font-label mb-1">Search Query:</p>
-                                        <p className="text-[10px] text-white font-mono">{selectedMapping.evidence.searchQuery}</p>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                                {selectedMapping.evidence.sources && selectedMapping.evidence.sources.length > 0 && (
-                                  <div className="space-y-1 pt-3 border-t border-[#9c27b0]/20">
-                                    <p className="text-[9px] text-on-surface-variant uppercase font-label mb-2">Sources Referenced:</p>
-                                    {selectedMapping.evidence.sources.slice(0, 5).map((source, idx) => (
-                                      <a
-                                        key={idx}
-                                        href={source.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex items-start gap-2 p-2 hover:bg-surface-container-highest/30 rounded transition-colors group"
-                                      >
-                                        <span className="text-[10px] text-on-surface-variant mt-0.5">{idx + 1}.</span>
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-[10px] text-white group-hover:text-[#ce93d8] transition-colors truncate">
-                                            {source.title}
-                                          </p>
-                                          <p className="text-[9px] text-on-surface-variant font-mono truncate">{source.url}</p>
-                                        </div>
-                                        <span className="material-symbols-outlined text-xs text-on-surface-variant group-hover:text-[#ce93d8] transition-colors">
-                                          open_in_new
-                                        </span>
-                                      </a>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Manual Actions */}
-                        {selectedMapping.manualActions.length > 0 && (
-                          <div className="space-y-3">
-                            <label className="block text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest">
-                              Action Items ({selectedMapping.manualActions.length})
-                            </label>
-                            <div className="bg-[#F63A22]/5 border border-[#F63A22]/20 p-4 rounded-lg">
-                              <div className="flex items-start gap-3 mb-3">
-                                <span className="material-symbols-outlined text-[#F63A22] text-xl">checklist</span>
-                                <div>
-                                  <p className="text-xs font-bold text-white mb-1">Complete These Steps:</p>
-                                  <p className="text-[10px] text-on-surface-variant">
-                                    Follow each action below to ensure proper server-side tracking for this tag.
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="space-y-2">
-                                {selectedMapping.manualActions.map((action, index) => (
-                                  <div key={index} className="flex gap-3 items-start">
-                                    <div className="bg-surface-container-highest rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0 mt-0.5">
-                                      <span className="text-[10px] font-bold text-white">{index + 1}</span>
-                                    </div>
-                                    <p className="text-xs text-on-surface leading-relaxed flex-1">{action}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Confidence Badge */}
-                        <div className={`p-4 rounded-lg flex gap-4 ${
-                          selectedMapping.confidence >= 8.5 ? 'bg-secondary/5 border border-secondary/10' :
-                          'bg-[#F63A22]/5 border border-[#F63A22]/10'
-                        }`}>
-                          <span className={`material-symbols-outlined ${
-                            selectedMapping.confidence >= 8.5 ? 'text-secondary' : 'text-[#F63A22]'
-                          }`}>
-                            {selectedMapping.confidence >= 8.5 ? 'verified' : 'info'}
-                          </span>
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between mb-2">
-                              <p className="text-xs font-bold text-on-surface">
-                                Confidence Score: {selectedMapping.confidence.toFixed(1)}/10
-                              </p>
-                              <div className="flex gap-1">
-                                {[...Array(10)].map((_, i) => (
-                                  <div
-                                    key={i}
-                                    className={`w-2 h-2 rounded-full ${
-                                      i < selectedMapping.confidence
-                                        ? selectedMapping.confidence >= 8.5 ? 'bg-secondary' : 'bg-[#F63A22]'
-                                        : 'bg-surface-variant'
-                                    }`}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                            <p className="text-xs text-on-surface-variant leading-relaxed">
-                              {selectedMapping.confidence >= 8.5
-                                ? 'High confidence mapping based on provider documentation. This is production-ready.'
-                                : selectedMapping.confidence >= 6
-                                ? 'Medium confidence. Review the recommendation above and verify it meets your requirements.'
-                                : 'Low confidence. Manual configuration and testing strongly recommended before deployment.'}
-                            </p>
-                            {selectedMapping.provisional && (
-                              <div className="mt-2 pt-2 border-t border-outline-variant/20">
-                                <p className="text-[10px] text-[#F63A22] font-bold uppercase tracking-wider flex items-center gap-1">
-                                  <span className="material-symbols-outlined text-xs">info</span>
-                                  Provisional Mapping - Requires Validation
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              {/* Right Sidebar: Live Debugger */}
-              <aside className="col-span-12 lg:col-span-3">
-                <div className="space-y-4">
-                  {/* Debugger */}
-                  <div className="bg-surface-container-lowest border border-outline-variant/10 rounded-lg overflow-hidden flex flex-col h-[400px]">
-                    <div className="px-3 py-3 bg-surface-container-high flex items-center justify-between border-b border-outline-variant/10">
-                      <span className="text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-tighter">
-                        Activity Log
-                      </span>
-                      <span className="text-[9px] font-mono text-secondary">LIVE</span>
-                    </div>
-                    <div className="p-3 font-mono text-[10px] space-y-2 overflow-y-auto custom-scrollbar flex-grow">
-                      {logs.length === 0 ? (
-                        <p className="text-on-surface-variant">No activity yet</p>
-                      ) : (
-                        logs.map((log, index) => (
-                          <div key={index} className="text-on-surface-variant">
-                            {log}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                    <div className="p-3 border-t border-outline-variant/10 flex justify-center">
-                      <button
-                        onClick={() => setLogs([])}
-                        className="text-[9px] uppercase font-bold text-on-surface-variant hover:text-white border-b border-outline-variant/50 pb-0.5"
-                      >
-                        Clear Logs
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Stats Card */}
-                  <div className="bg-surface-container-high p-4 rounded-lg border border-outline-variant/10 space-y-3">
-                    <h4 className="text-xs font-bold text-white flex items-center gap-2">
-                      <span className="material-symbols-outlined text-sm">insights</span>
-                      Migration Summary
-                    </h4>
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="material-symbols-outlined text-xs text-secondary">check_circle</span>
-                          <span className="text-on-surface-variant">Ready:</span>
-                        </div>
-                        <span className="text-secondary font-mono font-bold">{completedCount}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="material-symbols-outlined text-xs text-[#F63A22]">error</span>
-                          <span className="text-on-surface-variant">Need Review:</span>
-                        </div>
-                        <span className="text-[#F63A22] font-mono font-bold">{report.summaryCounts?.warnings || 0}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="material-symbols-outlined text-xs text-[#ffb4a7]">edit_note</span>
-                          <span className="text-on-surface-variant">Action Items:</span>
-                        </div>
-                        <span className="text-[#ffb4a7] font-mono font-bold">{report.summaryCounts?.manualActions || 0}</span>
-                      </div>
-                      {(report.summaryCounts?.highRisk || 0) > 0 && (
-                        <div className="flex justify-between items-center text-xs pt-2 border-t border-outline-variant/20">
-                          <div className="flex items-center gap-1.5">
-                            <span className="material-symbols-outlined text-xs text-error">warning</span>
-                            <span className="text-error font-bold">High Risk:</span>
-                          </div>
-                          <span className="text-error font-mono font-bold">{report.summaryCounts.highRisk}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="pt-3 border-t border-outline-variant/20">
-                      <p className="text-[9px] text-on-surface-variant leading-relaxed">
-                        {completedCount === totalCount
-                          ? '🎉 All tags are ready! Export the blueprint to proceed with deployment.'
-                          : report.summaryCounts?.warnings > 0
-                          ? `⚠️ Review ${report.summaryCounts.warnings} tag${report.summaryCounts.warnings !== 1 ? 's' : ''} before deployment.`
-                          : '📋 Complete action items to finalize migration.'}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Help Card */}
-                  <div className="bg-surface-container-high p-4 rounded-lg border border-outline-variant/10 space-y-3">
-                    <h4 className="text-xs font-bold text-white flex items-center gap-2">
-                      <span className="material-symbols-outlined text-sm">help</span>
-                      Understanding Mappings
-                    </h4>
-                    <div className="space-y-2">
-                      <div className="flex items-start gap-2">
-                        <div className="bg-secondary/20 p-1 rounded flex-shrink-0">
-                          <span className="material-symbols-outlined text-secondary text-xs">book</span>
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-white">Rule-Based</p>
-                          <p className="text-[9px] text-on-surface-variant leading-relaxed">
-                            Verified mappings from official provider documentation
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <div className="bg-[#9c27b0]/20 p-1 rounded flex-shrink-0">
-                          <span className="material-symbols-outlined text-[#ce93d8] text-xs">psychology</span>
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-white">AI-Enhanced</p>
-                          <p className="text-[9px] text-on-surface-variant leading-relaxed">
-                            AI researched current docs when no rule was found
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="pt-3 border-t border-outline-variant/20">
-                      <a className="inline-flex items-center gap-1 text-[10px] text-primary font-bold hover:underline" href="#">
-                        Read Migration Guide
-                        <span className="material-symbols-outlined text-xs">arrow_forward</span>
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              </aside>
-            </div>
-            </>
-          )}
-        </div>
-
-        {/* Fixed Action Bar */}
-        {report && (
-          <div className="fixed bottom-0 left-0 w-full bg-surface-container-lowest/90 backdrop-blur-md border-t border-outline-variant/10 z-50">
-            <div className="max-w-[1920px] mx-auto px-8 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
-              <div className="flex items-center gap-6 w-full md:w-auto">
-                <div className="space-y-1 flex-grow">
-                  <div className="flex justify-between text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-widest mb-1">
-                    <span>Migration Progress</span>
-                    <span>{deploymentResolvedCount} of {totalCount} tags</span>
-                  </div>
-                  <div className="w-full md:w-64 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-secondary shadow-[0_0_8px_rgba(95,222,143,0.5)] transition-all duration-500"
-                      style={{ width: `${deploymentProgressPercent}%` }}
-                    ></div>
-                  </div>
-                </div>
-                {totalCount > 0 && (
-                  <div className="hidden sm:block text-[11px] font-mono text-on-surface-variant bg-surface-container px-3 py-1.5 rounded">
-                    CONFIDENCE:{' '}
-                    <span className="text-white">{deploymentConfidenceScore.toFixed(1)}/10</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-4 w-full md:w-auto">
-                <button
-                  onClick={() => addLog('Exporting migration blueprint...')}
-                  className="flex-1 md:flex-none border border-outline-variant/30 px-6 py-3 rounded-xl text-sm font-bold text-white hover:bg-white/5 transition-all"
-                >
-                  Export Report
-                </button>
-                <button
-                  onClick={() => addLog('Blueprint ready for deployment')}
-                  className="flex-1 md:flex-none bg-primary px-8 py-3 rounded-xl text-sm font-bold text-on-primary shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                >
-                  View Deployment Guide
-                </button>
-              </div>
+        {needsGtmReconnect && (
+          <div className="bg-orange-950/80 border-b border-orange-500/40 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className="text-sm text-orange-100">
+              <span className="font-semibold text-white">Google Tag Manager disconnected.</span> Your saved session is no
+              longer valid on the API (common after restarting the server). Reconnect to load accounts and deploy.
+            </p>
+            <div className="flex gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleGtmReconnect}
+                className="px-4 py-2 rounded-lg text-sm font-bold bg-[#41ffaf] text-[#003822] hover:opacity-90"
+              >
+                Reconnect GTM
+              </button>
+              <button
+                type="button"
+                onClick={() => setNeedsGtmReconnect(false)}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-orange-200 hover:bg-white/10"
+              >
+                Dismiss
+              </button>
             </div>
           </div>
         )}
-      </main>
+
+        <div className="flex md:hidden border-b border-white/5 bg-[#1A1A1A] px-3 py-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setWorkspaceTab('review')}
+            className={`flex-1 py-2 rounded-lg text-xs font-semibold ${
+              workspaceTab === 'review' ? 'bg-[#353535] text-white' : 'text-gray-400'
+            }`}
+          >
+            Tag review
+          </button>
+          <button
+            type="button"
+            onClick={() => setWorkspaceTab('deployment')}
+            className={`flex-1 py-2 rounded-lg text-xs font-semibold ${
+              workspaceTab === 'deployment' ? 'bg-[#353535] text-white' : 'text-gray-400'
+            }`}
+          >
+            Deployment log
+          </button>
+        </div>
+
+        <main className="flex bg-[#131313] overflow-hidden min-h-0 h-[calc(100dvh-8.5rem)] md:h-[calc(100dvh-7.5rem)]">
+          {workspaceTab === 'deployment' ? (
+            <div className="flex-1 flex flex-col min-h-0 p-6 md:p-8 overflow-hidden">
+              <div className="max-w-4xl mx-auto w-full flex flex-col min-h-0 flex-1">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
+                  <div>
+                    <h1 className="text-2xl font-bold text-white tracking-tight">Deployment log</h1>
+                    <p className="text-sm text-[#bacbbe] mt-1">
+                      Live output and results from GTM deploy. The API runs as one request; progress appears when it
+                      completes.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceTab('review')}
+                    className="shrink-0 px-5 py-2.5 rounded-lg text-sm font-semibold bg-[#353535] text-white hover:bg-[#404040] border border-white/10 transition-colors"
+                  >
+                    ← Back to tag review
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                  <div
+                    className={`rounded-lg p-4 border ${
+                      isDeploying ? 'border-[#41ffaf]/40 bg-[#41ffaf]/5' : 'border-white/10 bg-[#20201f]'
+                    }`}
+                  >
+                    <p className="text-[10px] uppercase tracking-wider text-[#bacbbe] mb-1">Status</p>
+                    <p className="text-sm font-semibold text-white flex items-center gap-2">
+                      {isDeploying ? (
+                        <>
+                          <span className="inline-block h-3 w-3 rounded-full border-2 border-[#41ffaf] border-t-transparent animate-spin" />
+                          Deploying…
+                        </>
+                      ) : deploymentResult ? (
+                        deploymentResult.failed > 0 ? (
+                          <span className="text-orange-300">Completed with errors</span>
+                        ) : (
+                          <span className="text-[#41ffaf]">Completed</span>
+                        )
+                      ) : (
+                        <span className="text-[#bacbbe]">Idle</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="rounded-lg p-4 border border-white/10 bg-[#20201f]">
+                    <p className="text-[10px] uppercase tracking-wider text-[#bacbbe] mb-1">Deployed</p>
+                    <p className="text-xl font-mono font-bold text-[#41ffaf]">
+                      {deploymentResult?.deployed ?? '—'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg p-4 border border-white/10 bg-[#20201f]">
+                    <p className="text-[10px] uppercase tracking-wider text-[#bacbbe] mb-1">Failed</p>
+                    <p className="text-xl font-mono font-bold text-orange-300">
+                      {deploymentResult != null
+                        ? deploymentResult.failed ??
+                          (Array.isArray(deploymentResult.errors) ? deploymentResult.errors.length : 0)
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+
+                {deploymentResult?.workspacePath && (
+                  <p className="text-xs font-mono text-[#b6c4ff] mb-3 break-all">
+                    Workspace: {deploymentResult.workspacePath}
+                  </p>
+                )}
+
+                <div className="flex-1 min-h-[200px] flex flex-col rounded-xl border border-white/10 bg-[#0e0e0e] overflow-hidden">
+                  <div className="px-4 py-2 border-b border-white/10 flex justify-between items-center bg-[#1c1b1b]">
+                    <span className="text-[10px] uppercase tracking-widest text-[#bacbbe] font-semibold">Console</span>
+                    <span className="text-[10px] text-gray-500">{logs.length} line(s)</span>
+                  </div>
+                  <div
+                    ref={deploymentLogRef}
+                    className="flex-1 overflow-y-auto p-4 font-mono text-xs text-[#e5e2e1] space-y-1 leading-relaxed"
+                  >
+                    {logs.length === 0 ? (
+                      <p className="text-[#bacbbe]">
+                        No log lines yet. Open <strong className="text-white">Deploy Changes</strong>, run a deployment,
+                        or switch back to tag review.
+                      </p>
+                    ) : (
+                      logs.map((line, i) => (
+                        <div key={`${i}-${line.slice(0, 24)}`} className="whitespace-pre-wrap break-words">
+                          {line}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceTab('review')}
+                    className="px-6 py-3 rounded-lg text-sm font-bold bg-[#353535] text-white hover:bg-[#404040] transition-colors"
+                  >
+                    Back to tag review
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeploymentModal(true)}
+                    disabled={isDeploying}
+                    className="px-6 py-3 rounded-lg text-sm font-bold bg-[#41ffaf] text-[#003822] hover:opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Deploy again
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+          <aside className="w-72 bg-[#1c1b1b] overflow-y-auto px-4 py-6 flex flex-col gap-2 border-r border-white/5">
+            <div className="px-2 mb-4">
+              <h2 className="text-xs uppercase tracking-widest text-[#bacbbe] font-semibold">By tag type</h2>
+            </div>
+
+            {groups.map(([groupKey, groupTags]) => {
+              const serverFamily = groupKey === 'all' ? null : getServerType(groupKey);
+              const label = groupKey === 'all' ? 'All' : getClientTagTypeLabel(groupKey);
+              const icon = groupKey === 'all' ? 'category' : getDestinationIcon(serverFamily);
+              const approved = groupTags.filter((t) => approvedTags.has(t.clientTagId)).length;
+              const total = groupTags.length || 1;
+              const pct = Math.round((approved / total) * 100);
+              const isActive = activeGroupKey === groupKey;
+
+              return (
+                <button
+                  key={groupKey}
+                  onClick={() => setActiveGroupKey(groupKey)}
+                  className={`flex flex-col gap-1 w-full p-3 rounded-lg transition-all ${
+                    isActive ? 'bg-[#353535]' : 'hover:bg-white/5 text-[#bacbbe]'
+                  }`}
+                >
+                  <div className="flex justify-between items-center w-full">
+                    <div className="flex items-center gap-3">
+                      <span className={`material-symbols-outlined ${isActive ? 'text-[#41ffaf]' : 'text-[#bacbbe]'}`}>
+                        {icon}
+                      </span>
+                      <span className="font-medium text-sm">{label}</span>
+                    </div>
+                    <span className="font-mono text-[10px] text-[#41ffaf]">
+                      {approved}/{groupTags.length} Approved
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#20201f] h-1 rounded-full overflow-hidden mt-2">
+                    <div className="bg-[#41ffaf] h-full" style={{ width: `${pct}%` }} />
+                  </div>
+                </button>
+              );
+            })}
+          </aside>
+
+          <section className="flex-grow p-8 overflow-y-auto">
+            <div className="max-w-4xl mx-auto">
+              <header className="mb-8 flex justify-between items-end">
+                <div>
+                  <div className="flex items-center gap-2 text-[#41ffaf] mb-2">
+                    <span className="material-symbols-outlined text-sm">terminal</span>
+                    <span className="font-mono text-xs tracking-tight">RUN_ID: {runId.slice(0, 12)}</span>
+                  </div>
+                  <h1 className="text-3xl font-bold tracking-tight">
+                    Reviewing {active?.[0] === 'all' ? 'Tags' : getClientTagTypeLabel(active?.[0])}
+                  </h1>
+                </div>
+                <div className="flex items-center gap-3 bg-[#20201f] p-1 rounded-lg">
+                  <button className="px-4 py-2 text-xs font-semibold rounded bg-[#353535]">All Tags</button>
+                </div>
+              </header>
+
+              <div className="space-y-4">
+                {activeTags.map((m) => {
+                  const isApproved = approvedTags.has(m.clientTagId);
+                  const isExpanded = expandedTags.has(m.clientTagId);
+                  const detected = report?.detectedTags?.find((t) => t.id === m.clientTagId);
+                  const status = detected?.status ?? 'ready';
+                  const badge =
+                    status === 'ready'
+                      ? 'bg-green-500/10 text-green-400'
+                      : status === 'needs_review'
+                        ? 'bg-orange-500/10 text-orange-400'
+                        : 'bg-white/10 text-[#bacbbe]';
+
+                  return (
+                    <div
+                      key={m.clientTagId}
+                      className={`bg-[#20201f] rounded-lg overflow-hidden transition-all border ${
+                        isExpanded
+                          ? 'border-[#41ffaf]/20 shadow-lg shadow-[#41ffaf]/5'
+                          : 'border-transparent hover:border-white/5'
+                      }`}
+                    >
+                      <div className={`p-5 flex items-center justify-between ${isExpanded ? 'border-b border-white/5' : ''}`}>
+                        <div className="flex items-center gap-4">
+                          <div className="bg-[#41ffaf]/10 p-2 rounded-lg">
+                            <span className="material-symbols-outlined text-[#41ffaf]">
+                              {getIconForTagType(m.clientTagType)}
+                            </span>
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-white">{m.clientTagName}</h3>
+                            <div className="flex items-center gap-3 mt-1">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${badge}`}>
+                                {status === 'needs_review' ? 'Needs Review' : 'Ready'}
+                              </span>
+                              <span className="text-xs text-gray-500 font-mono">Trigger: {detected?.triggerSummary || '—'}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-6">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-400 font-medium">Approved</span>
+                            <button
+                              onClick={() => {
+                                const next = new Set(approvedTags);
+                                if (isApproved) next.delete(m.clientTagId);
+                                else next.add(m.clientTagId);
+                                setApprovedTags(next);
+                              }}
+                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                isApproved ? 'bg-[#41ffaf]' : 'bg-white/10'
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full transition ${
+                                  isApproved ? 'translate-x-6 bg-[#003822]' : 'translate-x-1 bg-gray-500'
+                                }`}
+                              />
+                            </button>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              const next = new Set(expandedTags);
+                              if (isExpanded) next.delete(m.clientTagId);
+                              else next.add(m.clientTagId);
+                              setExpandedTags(next);
+                            }}
+                            className="material-symbols-outlined text-gray-500 hover:text-white transition-all"
+                          >
+                            {isExpanded ? 'expand_less' : 'expand_more'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <div className="p-6 bg-[#1c1b1b]">
+                          <h4 className="text-[10px] uppercase tracking-widest text-gray-500 mb-4 font-bold">
+                            Detailed Mapping
+                          </h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="bg-[#20201f] p-4 rounded-lg">
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-[10px] font-mono text-gray-400">Client-Side</span>
+                                <span className="material-symbols-outlined text-xs text-gray-500">input</span>
+                              </div>
+                              <div className="font-mono text-xs text-gray-300">Type: {m.clientTagType}</div>
+                            </div>
+                            <div className="bg-[#20201f] p-4 rounded-lg border-l-2 border-[#41ffaf]">
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-[10px] font-mono text-[#41ffaf]">Server-Side</span>
+                                <span className="material-symbols-outlined text-xs text-[#41ffaf]">dns</span>
+                              </div>
+                              <div className="font-mono text-xs text-gray-300">
+                                Recommendation: {m.serverRecommendation || '—'}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-6 flex justify-end gap-3">
+                            <button className="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 transition-all">
+                              Manual Edit
+                            </button>
+                            <button
+                              onClick={() => setApprovedTags((prev) => new Set(prev).add(m.clientTagId))}
+                              className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#41ffaf] text-[#003822]"
+                            >
+                              Approve Mapping
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+            </>
+          )}
+        </main>
+
+        <footer className="bg-[#0e0e0e] min-h-16 px-4 md:px-8 py-3 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 border-t border-white/5 fixed bottom-0 left-0 right-0 z-50">
+          {workspaceTab === 'deployment' ? (
+            <>
+              <div className="flex items-center gap-3 text-xs text-[#bacbbe]">
+                <span className="material-symbols-outlined text-base text-[#41ffaf]">terminal</span>
+                <span>
+                  {isDeploying ? 'Deployment in progress…' : 'View full output above.'}{' '}
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceTab('review')}
+                    className="text-[#41ffaf] font-semibold hover:underline ml-1"
+                  >
+                    Back to tag review
+                  </button>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDeploymentModal(true)}
+                disabled={isDeploying}
+                className="px-6 py-2 rounded-lg text-sm font-bold bg-[#41ffaf] text-[#003822] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+              >
+                Deploy again
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-8 flex-grow max-w-2xl min-w-0">
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-xs font-bold text-gray-500 uppercase tracking-tighter hidden sm:inline">
+                    Migration
+                  </span>
+                  <span className="font-mono text-xs text-[#41ffaf]">
+                    {approvedCount} / {tagMappings.length} Approved
+                  </span>
+                </div>
+                <div className="flex-grow h-2 bg-[#20201f] rounded-full overflow-hidden min-w-[80px]">
+                  <div className="bg-[#41ffaf] h-full" style={{ width: `${progressPct}%` }} />
+                </div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceTab('deployment')}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold bg-white/5 text-gray-300 hover:bg-white/10 border border-white/10"
+                >
+                  Deployment log
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (approvedCount === 0) {
+                      alert('Approve at least one tag before opening deployment.');
+                      return;
+                    }
+                    setShowDeploymentModal(true);
+                  }}
+                  disabled={approvedCount === 0}
+                  className={`px-6 py-2 rounded-lg text-sm font-bold transition-colors ${
+                    approvedCount === 0
+                      ? 'bg-white/5 text-gray-500 cursor-not-allowed'
+                      : 'bg-[#41ffaf] text-[#003822] hover:opacity-90'
+                  }`}
+                >
+                  Proceed to deployment
+                </button>
+              </div>
+            </>
+          )}
+        </footer>
+
+        {/* Deployment screen (modal) */}
+        {showDeploymentModal && (
+          <div className="fixed inset-0 z-[60] flex flex-col bg-black/70 backdrop-blur-sm">
+            {needsGtmReconnect && (
+              <div className="shrink-0 border-b border-orange-500/40 bg-orange-950/95 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <p className="text-sm text-orange-100">
+                  <span className="font-semibold text-white">Google Tag Manager disconnected.</span> Reconnect to load
+                  accounts and deploy. After Google sign-in you will return to this migration.
+                </p>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleGtmReconnect}
+                    className="px-4 py-2 rounded-lg text-sm font-bold bg-[#41ffaf] text-[#003822] hover:opacity-90"
+                  >
+                    Reconnect GTM
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNeedsGtmReconnect(false)}
+                    className="px-4 py-2 rounded-lg text-sm font-medium text-orange-200 hover:bg-white/10"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
+              <div className="w-full max-w-4xl bg-[#20201f] rounded-xl overflow-hidden shadow-2xl flex flex-col md:flex-row min-h-[600px] border border-white/5">
+              {/* Left Panel */}
+              <div className="w-full md:w-1/3 bg-[#1c1b1b] p-8 border-r border-white/5 flex flex-col">
+                <div className="mb-8">
+                  <h2 className="text-xs uppercase tracking-widest text-[#41ffaf] mb-2">Stage 04</h2>
+                  <h1 className="text-2xl font-bold leading-tight">Final Deployment Setup</h1>
+                </div>
+
+                <div className="bg-[#20201f] rounded-lg p-6 mb-8 border border-white/5">
+                  <p className="text-sm text-[#bacbbe] mb-4">Deployment Summary</p>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-4xl font-bold text-[#41ffaf]">{approvedTags.size}</span>
+                    <span className="text-sm text-[#bacbbe] font-medium">Approved Tags</span>
+                  </div>
+                  <p className="text-[10px] text-[#bacbbe]/90 leading-relaxed">
+                    Approved tags are deployed as <span className="text-white font-semibold">one server tag per client tag type</span>
+                    {approvedTags.size > 0 ? ` (≈${serverTagsToCreate} server tag${serverTagsToCreate === 1 ? '' : 's'} for this approval).` : '.'}
+                  </p>
+                  <div className="mt-6 space-y-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[#bacbbe]">Run</span>
+                      <span className="font-mono text-[#b6c4ff]">{runId.slice(0, 12)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[#bacbbe]">Mode</span>
+                      <span className="font-mono text-[#b6c4ff]">{containerMode || '—'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-auto flex gap-3">
+                  <button
+                    onClick={() => setShowDeploymentModal(false)}
+                    className="flex-1 text-sm font-medium text-[#bacbbe] hover:text-white transition-colors"
+                  >
+                    Cancel Session
+                  </button>
+                </div>
+              </div>
+
+              {/* Right Panel */}
+              <div className="w-full md:w-2/3 p-8 flex flex-col gap-10 overflow-y-auto max-h-[800px]">
+                {/* Target Container */}
+                <section>
+                  <h3 className="text-sm text-[#bacbbe] mb-4 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-xs">database</span> Target Container
+                  </h3>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="relative cursor-pointer">
+                      <input
+                        className="peer sr-only"
+                        name="container_mode"
+                        type="radio"
+                        checked={containerMode === 'existing'}
+                        onChange={() => {
+                          setContainerMode('existing');
+                          void loadServerContainers();
+                        }}
+                      />
+                      <div className="p-4 rounded-lg bg-[#1c1b1b] border border-transparent peer-checked:border-[#41ffaf] peer-checked:bg-[#41ffaf]/5 transition-all">
+                        <p className="text-sm font-semibold mb-1">Use Existing Container</p>
+                        <p className="text-xs text-[#bacbbe] leading-relaxed">Deploy to an existing provisioned environment.</p>
+                      </div>
+                    </label>
+
+                    <label className="relative cursor-pointer">
+                      <input
+                        className="peer sr-only"
+                        name="container_mode"
+                        type="radio"
+                        checked={containerMode === 'create'}
+                        onChange={() => {
+                          setContainerMode('create');
+                          if (gtmAccounts.length === 0) {
+                            void loadGtmAccounts().catch(() => {});
+                          }
+                        }}
+                      />
+                      <div className="p-4 rounded-lg bg-[#1c1b1b] border border-transparent peer-checked:border-[#41ffaf] peer-checked:bg-[#41ffaf]/5 transition-all">
+                        <p className="text-sm font-semibold mb-1">Create New Container</p>
+                        <p className="text-xs text-[#bacbbe] leading-relaxed">Initialize a new server-side instance.</p>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Existing container */}
+                  {containerMode === 'existing' && (
+                    <div className="mt-6 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="text-[10px] uppercase tracking-wider text-[#bacbbe]">Server Container</label>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={handleGtmReconnect}
+                            className="text-[10px] font-semibold text-orange-300 hover:underline"
+                          >
+                            Reconnect GTM
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void loadServerContainers()}
+                            className="text-[10px] font-semibold text-[#41ffaf] hover:underline"
+                          >
+                            {loadingContainers ? 'Loading…' : 'Load containers'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <select
+                        value={serverContainerPath}
+                        onChange={(e) => {
+                          const selectedPath = e.target.value;
+                          setServerContainerPath(selectedPath);
+                          const selectedContainer = serverContainers.find((c) => c.path === selectedPath);
+                          const url = selectedContainer?.taggingServerUrls?.[0] || '';
+                          setserver_container_url(url);
+                          if (url) addLog(`✅ Server container URL: ${url}`);
+                          else addLog('⚠️ No tagging URL found for this container.');
+                        }}
+                        className="w-full bg-[#353535] border-none rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-[#41ffaf]/40 transition-all"
+                      >
+                        <option value="">Choose a server container...</option>
+                        {serverContainers.map((c) => (
+                          <option key={c.path} value={c.path}>
+                            {c.name} ({c.publicId})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Create new container */}
+                  {containerMode === 'create' && (
+                    <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <label className="text-[10px] uppercase tracking-wider text-[#bacbbe]">GTM Account</label>
+                          <button
+                            type="button"
+                            onClick={handleGtmReconnect}
+                            className="text-[10px] font-semibold text-orange-300 hover:underline"
+                          >
+                            Reconnect GTM
+                          </button>
+                        </div>
+                        <select
+                          value={selectedAccount}
+                          onChange={(e) => setSelectedAccount(e.target.value)}
+                          className="w-full bg-[#353535] border-none rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-[#41ffaf]/40 transition-all"
+                        >
+                          <option value="">Select account...</option>
+                          {gtmAccounts.map((a) => (
+                            <option key={a.path} value={a.path}>
+                              {a.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase tracking-wider text-[#bacbbe]">Container Name</label>
+                        <input
+                          className="w-full bg-[#353535] border-none rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-[#41ffaf]/40 transition-all font-mono"
+                          placeholder="e.g. production-main-ss"
+                          type="text"
+                          value={newContainerName}
+                          onChange={(e) => setNewContainerName(e.target.value)}
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <button
+                          onClick={async () => {
+                            if (!selectedAccount || !newContainerName) return;
+                            setIsCreatingContainer(true);
+                            try {
+                              const gtmSessionId = getGtmSession();
+                              if (!gtmSessionId) {
+                                setNeedsGtmReconnect(true);
+                                throw new Error(
+                                  'No GTM session saved. Click "Reconnect GTM" in this dialog, then try again.'
+                                );
+                              }
+                              const result = await apiClient.createGtmServerContainer(gtmSessionId, {
+                                accountPath: selectedAccount,
+                                name: newContainerName,
+                                importId: run?.importId
+                              });
+                              setServerContainerPath(result.path);
+                              addLog(`✅ Created server container: ${result.publicId}`);
+                            } catch (err: any) {
+                              if (isGtmSessionApiError(err)) setNeedsGtmReconnect(true);
+                              alert(`Failed to create container: ${err.message}`);
+                            } finally {
+                              setIsCreatingContainer(false);
+                            }
+                          }}
+                          disabled={isCreatingContainer || !selectedAccount || !newContainerName}
+                          className={`w-full px-6 py-3 rounded-lg text-sm font-bold transition-all ${
+                            isCreatingContainer || !selectedAccount || !newContainerName
+                              ? 'bg-white/5 text-gray-400 cursor-not-allowed'
+                              : 'bg-[#41ffaf] text-[#003822] hover:opacity-90'
+                          }`}
+                        >
+                          {isCreatingContainer ? 'Creating…' : 'Create Server Container'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </section>
+
+                {/* Deployment Rules */}
+                <section>
+                  <h3 className="text-sm text-[#bacbbe] mb-4 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-xs">rule</span> Deployment Rules
+                  </h3>
+                  <div className="space-y-3">
+                    <label className="flex items-center gap-4 p-4 rounded-lg bg-[#1c1b1b] hover:bg-[#2a2a2a] transition-colors cursor-pointer border border-white/5">
+                      <input
+                        className="w-5 h-5 rounded bg-[#353535] text-[#41ffaf] focus:ring-offset-0 focus:ring-1 focus:ring-[#41ffaf]"
+                        type="checkbox"
+                        checked={deploymentRules.debugMode}
+                        onChange={(e) => setDeploymentRules((prev) => ({ ...prev, debugMode: e.target.checked }))}
+                      />
+                      <div className="flex-grow">
+                        <p className="text-sm font-medium">Enable Debug Mode</p>
+                        <p className="text-xs text-[#bacbbe]">Log detailed events for troubleshooting.</p>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-4 p-4 rounded-lg bg-[#1c1b1b] hover:bg-[#2a2a2a] transition-colors cursor-pointer border border-white/5">
+                      <input
+                        className="w-5 h-5 rounded bg-[#353535] text-[#41ffaf] focus:ring-offset-0 focus:ring-1 focus:ring-[#41ffaf]"
+                        type="checkbox"
+                        checked={deploymentRules.stagingFirst}
+                        onChange={(e) => setDeploymentRules((prev) => ({ ...prev, stagingFirst: e.target.checked }))}
+                      />
+                      <div className="flex-grow">
+                        <p className="text-sm font-medium">Publish to Staging First</p>
+                        <p className="text-xs text-[#bacbbe]">Test in a workspace before final production cutover.</p>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-4 p-4 rounded-lg bg-[#1c1b1b] hover:bg-[#2a2a2a] transition-colors cursor-pointer border border-white/5">
+                      <input
+                        className="w-5 h-5 rounded bg-[#353535] text-[#41ffaf] focus:ring-offset-0 focus:ring-1 focus:ring-[#41ffaf]"
+                        type="checkbox"
+                        checked={deploymentRules.piiSanitization}
+                        onChange={(e) => setDeploymentRules((prev) => ({ ...prev, piiSanitization: e.target.checked }))}
+                      />
+                      <div className="flex-grow">
+                        <p className="text-sm font-medium">Sanitize PII Data</p>
+                        <p className="text-xs text-[#bacbbe]">Scrub sensitive strings from logs.</p>
+                      </div>
+                    </label>
+                  </div>
+                </section>
+
+                {/* Footer action */}
+                <div className="mt-auto pt-6 flex flex-col gap-4 border-t border-white/5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowDeploymentModal(false)}
+                      className="text-sm font-medium text-[#bacbbe] hover:text-white transition-colors"
+                    >
+                      Cancel Session
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGtmReconnect}
+                      className="text-sm font-semibold text-[#41ffaf] hover:underline"
+                    >
+                      Reconnect GTM
+                    </button>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (approvedTags.size === 0) {
+                        alert('Please approve at least one tag before deploying');
+                        return;
+                      }
+                      if (!serverContainerPath) {
+                        alert('Select or create a server container first.');
+                        return;
+                      }
+                      setWorkspaceTab('deployment');
+                      setIsDeploying(true);
+                      setShowDeploymentModal(false);
+                      addLog(`🚀 Starting deployment of ${approvedTags.size} approved tag(s)...`);
+                      addLog(`📦 Server container path: ${serverContainerPath}`);
+                      if (server_container_url) addLog(`🌐 Server URL: ${server_container_url}`);
+                      try {
+                        const gtmSessionId = getGtmSession();
+                        if (!gtmSessionId) {
+                          setNeedsGtmReconnect(true);
+                          throw new Error(
+                            'No GTM session saved. Click "Reconnect GTM" in this dialog, then deploy again.'
+                          );
+                        }
+                        addLog('⏳ Sending deploy request to API (this may take a minute)...');
+                        const result = await apiClient.deployApprovedTags(
+                          runId,
+                          Array.from(approvedTags),
+                          serverContainerPath,
+                          server_container_url,
+                          gtmSessionId
+                        );
+                        processDeploymentResult(result);
+                        try {
+                          const refreshed = await apiClient.getRun(runId);
+                          setRun(refreshed);
+                        } catch {
+                          /* non-fatal */
+                        }
+                      } catch (error: any) {
+                        if (isGtmSessionApiError(error)) setNeedsGtmReconnect(true);
+                        addLog(`❌ Deployment failed: ${error.message}`);
+                        alert(`Deployment failed: ${error.message}`);
+                      } finally {
+                        setIsDeploying(false);
+                      }
+                    }}
+                    className="bg-[#41ffaf] text-[#003822] font-bold px-8 py-3.5 rounded-lg flex items-center gap-3 active:scale-95 transition-all"
+                    disabled={isDeploying}
+                  >
+                    <span>Deploy Now</span>
+                    <span className="material-symbols-outlined text-xl">rocket_launch</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            </div>
+          </div>
+        )}
+      </div>
     </ProtectedRoute>
   );
+
 }

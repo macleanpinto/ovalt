@@ -10,6 +10,9 @@ export function getApiBaseUrl(): string {
 
 const API_URL = getApiBaseUrl();
 
+/** localStorage key for GTM OAuth state id (server holds tokens in memory / future persistence). */
+export const GTM_SESSION_STORAGE_KEY = 'gtm_session';
+
 export class APIError extends Error {
   constructor(public status: number, message: string, public data?: any) {
     super(message);
@@ -60,6 +63,16 @@ export interface Run {
   rulesetVersion: string;
   createdAt: string;
   completedAt?: string;
+  deploymentHistory?: Array<{
+    timestamp: string;
+    deployed: number;
+    failed: number;
+    deployedTagIds: string[];
+    serverContainerPath: string;
+    server_container_url: string;
+    workspacePath: string;
+  }>;
+  lastDeployedAt?: string;
 }
 
 export interface Stats {
@@ -116,11 +129,20 @@ class APIClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new APIError(
-        response.status,
-        error.message || response.statusText,
-        error
-      );
+      const msg = typeof (error as { message?: string }).message === 'string' ? (error as { message: string }).message : '';
+      if (
+        response.status === 401 &&
+        typeof window !== 'undefined' &&
+        /invalid gtm session|missing x-gtm-session|invalid or expired gtm session/i.test(msg)
+      ) {
+        window.localStorage.removeItem(GTM_SESSION_STORAGE_KEY);
+        window.dispatchEvent(
+          new CustomEvent('tagrelay:gtm-session-lost', {
+            detail: { path, message: msg }
+          })
+        );
+      }
+      throw new APIError(response.status, msg || response.statusText, error);
     }
 
     // Handle 204 No Content
@@ -292,11 +314,21 @@ class APIClient {
     return this.request(`/gtm/oauth/start${queryParams}`);
   }
 
-  async deployApprovedTags(runId: string, approvedTagIds: string[], serverContainerPath: string, gtmSessionId: string): Promise<any> {
+  async deployApprovedTags(
+    runId: string,
+    approvedTagIds: string[],
+    serverContainerPath: string,
+    server_container_url: string,
+    gtmSessionId: string
+  ): Promise<any> {
     return this.request(`/migrations/${runId}/deploy-approved`, {
       method: 'POST',
       headers: { 'x-gtm-session': gtmSessionId },
-      body: JSON.stringify({ approvedTagIds, serverContainerPath })
+      body: JSON.stringify({
+        approvedTagIds,
+        serverContainerPath,
+        server_container_url
+      })
     });
   }
 
@@ -319,6 +351,35 @@ class APIClient {
       body: JSON.stringify({ containerPath, workspaceId })
     });
   }
+
+  async createGtmServerContainer(
+    gtmSessionId: string,
+    body: { accountPath: string; name: string; importId?: string }
+  ): Promise<{ path: string; publicId?: string; containerId?: string; tagManagerUrl?: string }> {
+    return this.request('/gtm/create-server-container', {
+      method: 'POST',
+      headers: { 'x-gtm-session': gtmSessionId },
+      body: JSON.stringify(body)
+    });
+  }
 }
 
 export const apiClient = new APIClient();
+
+/** True when the API rejected the GTM OAuth session (e.g. API restarted, stale state id in localStorage). */
+export function isGtmSessionApiError(err: unknown): boolean {
+  if (!(err instanceof APIError) || err.status !== 401) return false;
+  return /invalid gtm session|missing x-gtm-session|invalid or expired gtm session/i.test(err.message);
+}
+
+/**
+ * Clears stored GTM session and redirects the browser to Google OAuth.
+ * After consent, user returns to `returnPath` with `?gtmSession=` set.
+ */
+export async function reconnectGoogleTagManager(returnPath?: string): Promise<void> {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(GTM_SESSION_STORAGE_KEY);
+  const rp = returnPath ?? `${window.location.pathname}${window.location.search}`;
+  const { url } = await apiClient.startGtmOAuth(rp);
+  window.location.assign(url);
+}

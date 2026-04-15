@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 /**
- * Reset Ovalt-managed GTM entities in the target workspace, then create exactly:
- *   - one Scroll Depth trigger (25/50/75/90% vertical)
- *   - one GA4 Event tag (event name "scroll") on that trigger
+ * Reset Ovalt-managed GTM entities in the target workspace, then create client-side setup:
+ *   - One Google tag (googtag) for OVALT_GA4_MEASUREMENT_ID on All Pages
+ *   - Scroll depth trigger (25/50/75/90%) + GA4 Event "scroll"
+ *   - Timer 30s + GA4 Event "ovalt_engagement_30s"
+ * One googtag; two GA4 Event tags (scroll + time), both linked to the Google tag.
  *
- * Deletes only tags and triggers whose names start with "Ovalt Engagement" (other container items are untouched).
+ * By default deletes only tags/triggers whose names start with "Ovalt Engagement".
+ * Use --delete-all-tags to remove every tag in the workspace; --delete-all-triggers to remove every trigger
+ * (recommended together for a clean recreate). Shorthand: npm run setup:ovalt-gtm:reset -w @tag-relay/api
  *
  * Credentials (from repo-root .env):
  *   OVALT_GTM_CLIENT_ID       — OAuth client ID (or GTM_OAUTH_CLIENT_ID)
@@ -17,17 +21,26 @@
  *   OVALT_GTM_WORKSPACE_PATH — full API path: accounts/ACC/containers/CONT/workspaces/WS
  *   or OVALT_GTM_ACCOUNT_ID + OVALT_GTM_CONTAINER_ID (+ optional OVALT_GTM_WORKSPACE_ID)
  *
- * Required for the scroll tag:
+ * Required:
  *   OVALT_GA4_MEASUREMENT_ID  — e.g. G-XXXXXXXX (GA4 stream Measurement ID)
  *
  * Usage:
  *   cd apps/api && node scripts/setup-ovalt-gtm-engagement.mjs
+ *   npm run setup:ovalt-gtm:create-workspace -w @tag-relay/api
+ *     (same as: ... setup:ovalt-gtm ... -- --create-workspace — new editable workspace if yours is "already submitted")
  *   cd apps/api && node scripts/setup-ovalt-gtm-engagement.mjs --authorize
  *   cd apps/api && node scripts/setup-ovalt-gtm-engagement.mjs --authorize --write-env
  *     (saves OVALT_GTM_REFRESH_TOKEN to repo-root .env)
  *
  * Troubleshooting: ERR_MODULE_NOT_FOUND (googleapis, etc.) → from monorepo root run `npm install`,
  * then `npm run setup:ovalt-gtm:auth -w @tag-relay/api` (do not invoke the script without installed deps).
+ *
+ * "Workspace is already submitted" → by default this script creates a new workspace and retries once (no flag needed).
+ * Use --create-workspace to always create a new workspace first; use --no-auto-workspace to disable auto-retry.
+ *
+ * Full wipe + recreate:
+ *   npm run setup:ovalt-gtm:reset -w @tag-relay/api
+ *   (same as --delete-all-tags --delete-all-triggers)
  */
 
 import { readFileSync } from "node:fs";
@@ -66,7 +79,11 @@ function applyEnvFile(filePath, overrideExisting) {
 applyEnvFile(path.join(repoRoot, ".env"), false);
 applyEnvFile(path.join(repoRoot, ".env.local"), true);
 
-const SCOPES = ["https://www.googleapis.com/auth/tagmanager.edit.containers"];
+const SCOPES = [
+  "https://www.googleapis.com/auth/tagmanager.edit.containers",
+  "https://www.googleapis.com/auth/tagmanager.delete.containers",
+  "https://www.googleapis.com/auth/tagmanager.publish"
+];
 
 const NAME_PREFIX = "Ovalt Engagement";
 
@@ -222,7 +239,10 @@ Use the SAME OAuth client as GTM_OAUTH_CLIENT_ID / GTM_OAUTH_CLIENT_SECRET in .e
 }
 
 const SCROLL_DEPTH_TRIGGER_NAME = `${NAME_PREFIX} — Scroll depth`;
-const SCROLL_GA4_TAG_NAME = `${NAME_PREFIX} — GA4 page scroll`;
+const TIMER_30_TRIGGER_NAME = `${NAME_PREFIX} — Timer 30s`;
+const GOOGLE_TAG_NAME = `${NAME_PREFIX} — Google tag`;
+const SCROLL_GA4_TAG_NAME = `${NAME_PREFIX} — GA4 scroll`;
+const TIMER_GA4_TAG_NAME = `${NAME_PREFIX} — GA4 time (30s)`;
 
 function scrollDepthTrigger(name) {
   return {
@@ -237,18 +257,74 @@ function scrollDepthTrigger(name) {
   };
 }
 
-/** Single GA4 Event on scroll; uses measurementIdOverride only (add a Google tag in GTM if publish requires it). */
-function ga4PageScrollTag(mid, scrollTriggerId) {
+function timerTrigger(name, intervalMs, limit, eventName) {
   return {
-    name: SCROLL_GA4_TAG_NAME,
+    name,
+    type: "timer",
+    parameter: [
+      { type: "template", key: "interval", value: String(intervalMs) },
+      { type: "template", key: "limit", value: String(limit) },
+      { type: "template", key: "eventName", value: eventName }
+    ]
+  };
+}
+
+function normalizeTriggerType(t) {
+  return String(t || "")
+    .toLowerCase()
+    .replace(/_/g, "");
+}
+
+/** Resolve an early-page-load trigger for the Google tag (All Pages / pageview / DOM ready, etc.). */
+function findAllPagesTriggerId(triggers) {
+  const list = triggers || [];
+  const nameLooksLikeAllPages = (n) => {
+    const s = String(n || "").toLowerCase();
+    return (
+      s === "all pages" ||
+      s.includes("all pages") ||
+      s.includes("every page") ||
+      /initialization.*all pages/.test(s) ||
+      s.includes("consent initialization")
+    );
+  };
+  const named = list.find((t) => nameLooksLikeAllPages(t.name));
+  if (named?.triggerId) return String(named.triggerId);
+
+  const earlyLoadTypes = new Set([
+    "pageview",
+    "domready",
+    "windowloaded",
+    "always",
+    "consentinit",
+    "initialization"
+  ]);
+  for (const t of list) {
+    const ty = normalizeTriggerType(t.type);
+    if (earlyLoadTypes.has(ty) && t.triggerId) return String(t.triggerId);
+  }
+  return null;
+}
+
+/**
+ * GA4 Event tag referencing the workspace Google tag (tag id), for GTM publish validation.
+ * Current GTM template requires measurementIdOverride to be non-empty even with tagReference.
+ * @param {string|string[]} firingTriggerId
+ * @param {string|number} configTagId — numeric tag id of googtag in same workspace
+ * @param {string} streamMeasurementId — GA4 stream id e.g. G-XXXXXXXX
+ */
+function ga4EventTag(name, eventName, firingTriggerId, configTagId, streamMeasurementId) {
+  return {
+    name,
     type: "gaawe",
     parameter: [
-      { type: "template", key: "eventName", value: "scroll" },
-      { type: "template", key: "measurementIdOverride", value: mid },
+      { type: "template", key: "eventName", value: eventName },
+      { type: "tagReference", key: "measurementId", value: String(configTagId) },
+      { type: "template", key: "measurementIdOverride", value: streamMeasurementId },
       { type: "boolean", key: "sendEcommerceData", value: "false" },
       { type: "list", key: "eventParameters", list: [] }
     ],
-    firingTriggerId: [String(scrollTriggerId)],
+    firingTriggerId: Array.isArray(firingTriggerId) ? firingTriggerId.map(String) : [String(firingTriggerId)],
     consentSettings: { consentStatus: "NOT_SET" }
   };
 }
@@ -262,6 +338,18 @@ async function deleteOvaltTags(tm, workspacePath) {
   }
 }
 
+/** Every tag in the workspace (destructive). */
+async function deleteAllWorkspaceTags(tm, workspacePath) {
+  const res = await tm.accounts.containers.workspaces.tags.list({ parent: workspacePath });
+  const tags = res.data.tag || [];
+  for (const t of tags) {
+    if (!t.path) continue;
+    await tm.accounts.containers.workspaces.tags.delete({ path: t.path });
+    console.log(`Deleted tag: ${t.name || t.tagId}`);
+  }
+  if (tags.length === 0) console.log("No tags to delete.");
+}
+
 async function deleteOvaltTriggers(tm, workspacePath) {
   const res = await tm.accounts.containers.workspaces.triggers.list({ parent: workspacePath });
   for (const tr of res.data.trigger || []) {
@@ -269,6 +357,18 @@ async function deleteOvaltTriggers(tm, workspacePath) {
     await tm.accounts.containers.workspaces.triggers.delete({ path: tr.path });
     console.log(`Deleted trigger: ${tr.name}`);
   }
+}
+
+/** Every trigger in the workspace (destructive). */
+async function deleteAllWorkspaceTriggers(tm, workspacePath) {
+  const res = await tm.accounts.containers.workspaces.triggers.list({ parent: workspacePath });
+  const triggers = res.data.trigger || [];
+  for (const tr of triggers) {
+    if (!tr.path) continue;
+    await tm.accounts.containers.workspaces.triggers.delete({ path: tr.path });
+    console.log(`Deleted trigger: ${tr.name || tr.triggerId}`);
+  }
+  if (triggers.length === 0) console.log("No triggers to delete.");
 }
 
 /**
@@ -329,9 +429,20 @@ function parseGtmContainerRef(raw) {
   return null;
 }
 
-/** @param {ReturnType<typeof google.tagmanager>} tm */
-async function resolveWorkspacePath(tm) {
-  if (workspacePathEnv) {
+/** @param {string} s */
+function extractContainerParentPath(s) {
+  const m = String(s).match(/^(accounts\/\d+\/containers\/\d+)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * @param {ReturnType<typeof google.tagmanager>} tm
+ * @param {{ createWorkspace?: boolean }} opts
+ */
+async function resolveWorkspacePath(tm, opts = {}) {
+  const createWorkspace = opts.createWorkspace === true;
+
+  if (workspacePathEnv && !createWorkspace) {
     return workspacePathEnv;
   }
 
@@ -346,6 +457,21 @@ async function resolveWorkspacePath(tm) {
     cont = parsed.containerId;
     if (parsed.workspaceId) wsId = parsed.workspaceId;
     console.log(`Parsed container from OVALT_GTM_CONTAINER_URL → account ${acc}, container ${cont}${wsId ? `, workspace ${wsId}` : ""}`);
+  }
+
+  if (createWorkspace && workspacePathEnv && (!acc || !cont)) {
+    const parent = extractContainerParentPath(workspacePathEnv);
+    if (parent) {
+      const m = parent.match(/accounts\/(\d+)\/containers\/(\d+)/);
+      if (m) {
+        acc = m[1];
+        cont = m[2];
+      }
+    }
+  }
+
+  if (createWorkspace) {
+    wsId = "";
   }
 
   if (!acc || !cont) {
@@ -374,10 +500,35 @@ ${hint}
   OVALT_GTM_WORKSPACE_ID=2
 
 If workspace id is omitted, the script picks "Default Workspace".
+
+If you see "Workspace is already submitted", run with --create-workspace (see file header).
 `);
     process.exit(1);
   }
   const containerPath = `accounts/${acc}/containers/${cont}`;
+
+  if (createWorkspace) {
+    // Date-only names collide after multiple runs the same day → duplicate workspace name error.
+    const wsName = `${NAME_PREFIX} CLI ${Date.now()}`;
+    const cr = await tm.accounts.containers.workspaces.create({
+      parent: containerPath,
+      requestBody: {
+        name: wsName,
+        description: "Created by setup-ovalt-gtm-engagement.mjs (--create-workspace)"
+      }
+    });
+    const p = cr.data.path;
+    if (!p) {
+      console.error("workspaces.create returned no path.");
+      process.exit(1);
+    }
+    console.log(
+      `Created new editable workspace "${wsName}"\n  ${p}\n` +
+        "Optional: set OVALT_GTM_WORKSPACE_PATH to the line above (or update OVALT_GTM_CONTAINER_URL) for future runs without --create-workspace.\n"
+    );
+    return p;
+  }
+
   if (wsId) {
     const p = `${containerPath}/workspaces/${wsId}`;
     console.log(`Using workspace path: ${p}`);
@@ -397,6 +548,168 @@ If workspace id is omitted, the script picks "Default Workspace".
   return def.path;
 }
 
+/** @param {unknown} err */
+function isWorkspaceSubmittedError(err) {
+  const msg = /** @type {{ response?: { data?: { error?: { message?: string } } } }} */ (err)?.response?.data?.error?.message || "";
+  return typeof msg === "string" && msg.toLowerCase().includes("already submitted");
+}
+
+/**
+ * @param {ReturnType<typeof google.tagmanager>} tm
+ * @param {string} workspacePath
+ */
+async function runOvaltEngagementSetup(tm, workspacePath) {
+  if (!measurementId) {
+    console.error(
+      "Set OVALT_GA4_MEASUREMENT_ID in repo-root .env (e.g. G-XXXXXXXX) for the Google tag and GA4 events."
+    );
+    process.exit(1);
+  }
+
+  const wipeAllTags = process.argv.includes("--delete-all-tags");
+  const wipeAllTriggers = process.argv.includes("--delete-all-triggers");
+
+  if (wipeAllTags) {
+    console.warn("\n--delete-all-tags: deleting every tag in this workspace.\n");
+    await deleteAllWorkspaceTags(tm, workspacePath);
+  } else {
+    await deleteOvaltTags(tm, workspacePath);
+  }
+
+  if (wipeAllTriggers) {
+    console.warn("\n--delete-all-triggers: deleting every trigger in this workspace.\n");
+    await deleteAllWorkspaceTriggers(tm, workspacePath);
+  } else {
+    await deleteOvaltTriggers(tm, workspacePath);
+  }
+
+  const triggersRes = await tm.accounts.containers.workspaces.triggers.list({ parent: workspacePath });
+  const existingTriggers = triggersRes.data.trigger || [];
+
+  let allPagesTid = findAllPagesTriggerId(existingTriggers);
+  const autoPageViewName = `${NAME_PREFIX} — Page view (All Pages)`;
+  if (!allPagesTid) {
+    const existingAuto = existingTriggers.find((t) => t.name === autoPageViewName);
+    if (existingAuto?.triggerId) {
+      allPagesTid = String(existingAuto.triggerId);
+    } else {
+      try {
+        const cr = await tm.accounts.containers.workspaces.triggers.create({
+          parent: workspacePath,
+          requestBody: {
+            name: autoPageViewName,
+            type: "pageview",
+            filter: []
+          }
+        });
+        allPagesTid = String(cr.data.triggerId);
+        console.log(`Created trigger ${autoPageViewName} (${allPagesTid}) for the Google tag.`);
+      } catch (err) {
+        console.error(
+          "No suitable page-load trigger found and create failed. Add a Page View trigger in GTM or fix API error:\n",
+          err.response?.data || err.message || err
+        );
+        process.exit(1);
+      }
+    }
+  }
+
+  const googBody = {
+    name: GOOGLE_TAG_NAME,
+    type: "googtag",
+    parameter: [{ type: "template", key: "tagId", value: measurementId }],
+    firingTriggerId: [allPagesTid],
+    consentSettings: { consentStatus: "NOT_SET" }
+  };
+  /** @type {string | number | null | undefined} */
+  let configTagId;
+  try {
+    const created = await tm.accounts.containers.workspaces.tags.create({
+      parent: workspacePath,
+      requestBody: googBody
+    });
+    configTagId = created.data.tagId;
+    console.log(`Created tag: ${GOOGLE_TAG_NAME} (${configTagId})`);
+  } catch (e1) {
+    const gaawcBody = {
+      name: GOOGLE_TAG_NAME,
+      type: "gaawc",
+      parameter: [
+        { type: "boolean", key: "sendPageView", value: "true" },
+        { type: "boolean", key: "enableSendToServerContainer", value: "false" },
+        { type: "template", key: "measurementId", value: measurementId }
+      ],
+      firingTriggerId: [allPagesTid],
+      consentSettings: { consentStatus: "NOT_SET" }
+    };
+    try {
+      const created = await tm.accounts.containers.workspaces.tags.create({
+        parent: workspacePath,
+        requestBody: gaawcBody
+      });
+      configTagId = created.data.tagId;
+      console.log(`Created tag: ${GOOGLE_TAG_NAME} (GA4 Configuration, ${configTagId})`);
+    } catch (e2) {
+      console.error("Could not create Google tag or GA4 Configuration tag:", e2.response?.data || e2.message || e2);
+      console.error("First attempt (googtag):", e1.response?.data || e1.message || e1);
+      process.exit(1);
+    }
+  }
+
+  const scrollTr = await tm.accounts.containers.workspaces.triggers.create({
+    parent: workspacePath,
+    requestBody: scrollDepthTrigger(SCROLL_DEPTH_TRIGGER_NAME)
+  });
+  const scrollTid = scrollTr.data.triggerId;
+  if (!scrollTid) {
+    console.error("Failed to create scroll depth trigger.");
+    process.exit(1);
+  }
+  console.log(`Created trigger: ${SCROLL_DEPTH_TRIGGER_NAME} (${scrollTid})`);
+
+  const scrollGa4Body = ga4EventTag(
+    SCROLL_GA4_TAG_NAME,
+    "scroll",
+    [scrollTid],
+    configTagId,
+    measurementId
+  );
+  await tm.accounts.containers.workspaces.tags.create({
+    parent: workspacePath,
+    requestBody: scrollGa4Body
+  });
+  console.log(`Created tag: ${SCROLL_GA4_TAG_NAME}`);
+
+  const timerTr = await tm.accounts.containers.workspaces.triggers.create({
+    parent: workspacePath,
+    requestBody: timerTrigger(TIMER_30_TRIGGER_NAME, 30_000, 1, "ovalt_engagement_30s")
+  });
+  const timerTid = timerTr.data.triggerId;
+  if (!timerTid) {
+    console.error("Failed to create timer trigger.");
+    process.exit(1);
+  }
+  console.log(`Created trigger: ${TIMER_30_TRIGGER_NAME} (${timerTid})`);
+
+  const timerGa4Body = ga4EventTag(
+    TIMER_GA4_TAG_NAME,
+    "ovalt_engagement_30s",
+    [timerTid],
+    configTagId,
+    measurementId
+  );
+  await tm.accounts.containers.workspaces.tags.create({
+    parent: workspacePath,
+    requestBody: timerGa4Body
+  });
+  console.log(`Created tag: ${TIMER_GA4_TAG_NAME}`);
+
+  console.log(
+    "\nDone. Open GTM → workspace → Preview, then Publish.\n" +
+      "Google tag + GA4 scroll + GA4 time-on-page (30s timer).\n"
+  );
+}
+
 async function main() {
   if (process.argv.includes("--authorize")) {
     const writeEnv = process.argv.includes("--write-env");
@@ -406,44 +719,39 @@ async function main() {
 
   const auth = buildAuth();
   const tm = google.tagmanager({ version: "v2", auth });
-  const workspacePath = await resolveWorkspacePath(tm);
+  const forceNewWs = process.argv.includes("--create-workspace");
+  const noAutoNewWs = process.argv.includes("--no-auto-workspace");
 
-  if (!measurementId) {
-    console.error(
-      "Set OVALT_GA4_MEASUREMENT_ID in repo-root .env (e.g. G-XXXXXXXX) for the GA4 scroll event tag."
-    );
-    process.exit(1);
+  let workspacePath = await resolveWorkspacePath(tm, { createWorkspace: forceNewWs });
+
+  try {
+    await runOvaltEngagementSetup(tm, workspacePath);
+  } catch (err) {
+    if (!noAutoNewWs && !forceNewWs && isWorkspaceSubmittedError(err)) {
+      console.warn(
+        "\nWorkspace is read-only (already submitted). Creating a new workspace and retrying once…\n" +
+          "(Use --no-auto-workspace to skip this, or --create-workspace to always create a new workspace first.)\n"
+      );
+      workspacePath = await resolveWorkspacePath(tm, { createWorkspace: true });
+      await runOvaltEngagementSetup(tm, workspacePath);
+    } else {
+      throw err;
+    }
   }
-
-  await deleteOvaltTags(tm, workspacePath);
-  await deleteOvaltTriggers(tm, workspacePath);
-
-  const scrollBody = scrollDepthTrigger(SCROLL_DEPTH_TRIGGER_NAME);
-  const createdTr = await tm.accounts.containers.workspaces.triggers.create({
-    parent: workspacePath,
-    requestBody: scrollBody
-  });
-  const scrollTid = createdTr.data.triggerId;
-  if (!scrollTid) {
-    console.error("Failed to create scroll depth trigger (no triggerId).");
-    process.exit(1);
-  }
-  console.log(`Created trigger: ${SCROLL_DEPTH_TRIGGER_NAME} (${scrollTid})`);
-
-  const tagBody = ga4PageScrollTag(measurementId, scrollTid);
-  await tm.accounts.containers.workspaces.tags.create({
-    parent: workspacePath,
-    requestBody: tagBody
-  });
-  console.log(`Created tag: ${SCROLL_GA4_TAG_NAME}`);
-
-  console.log(
-    "\nDone. Open GTM → workspace → Preview, then Publish.\n" +
-      "If publish validation fails, add a Google tag for this measurement ID in GTM or use tagReference per GTM docs.\n"
-  );
 }
 
 main().catch((err) => {
-  console.error(err.response?.data || err.message || err);
+  const data = err.response?.data;
+  const msg = data?.error?.message || err.message || String(err);
+  console.error(data || msg);
+  if (typeof msg === "string" && msg.toLowerCase().includes("already submitted")) {
+    console.error(`
+GTM workspace is read-only. This script normally creates a new workspace automatically unless you passed --no-auto-workspace.
+
+Manual options:
+  npm run setup:ovalt-gtm:create-workspace -w @tag-relay/api
+  Or: New workspace in the GTM UI → update OVALT_GTM_CONTAINER_URL
+`);
+  }
   process.exit(1);
 });

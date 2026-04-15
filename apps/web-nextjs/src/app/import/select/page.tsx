@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ProtectedRoute } from '@/lib/auth-context';
 import ImportStepper from '@/components/ImportStepper';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, isGtmSessionApiError, reconnectGoogleTagManager } from '@/lib/api-client';
 
 interface GTMContainer {
   containerId: string;
@@ -23,6 +23,7 @@ function ImportSelectInner() {
   const [containers, setContainers] = useState<GTMContainer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [staleGtmSession, setStaleGtmSession] = useState(false);
 
   useEffect(() => {
     const gtmSession = searchParams.get('gtmSession');
@@ -30,6 +31,7 @@ function ImportSelectInner() {
 
     if (gtmSession) {
       localStorage.setItem('gtm_session', gtmSession);
+      setStaleGtmSession(false);
     }
     if (gtmError) {
       setError(`GTM OAuth error: ${gtmError}`);
@@ -84,7 +86,14 @@ function ImportSelectInner() {
         setContainers(allContainers);
       } catch (err: any) {
         console.error('Failed to load containers:', err);
-        setError(err.message || 'Failed to load GTM containers');
+        if (isGtmSessionApiError(err)) {
+          setStaleGtmSession(true);
+          setError(
+            'Your Google Tag Manager session is no longer valid on the server (for example after restarting the API). Reconnect to continue.'
+          );
+        } else {
+          setError(err.message || 'Failed to load GTM containers');
+        }
       } finally {
         setIsLoading(false);
       }
@@ -150,12 +159,27 @@ function ImportSelectInner() {
             <div className="bg-[#93000a]/20 border border-[#ffb4ab]/20 rounded-xl p-8">
               <h3 className="text-xl font-bold text-[#ffb4ab] mb-2 headline-font">Error Loading Containers</h3>
               <p className="text-[#ffb4ab] mb-6">{error}</p>
-              <button
-                onClick={() => router.push('/import')}
-                className="px-6 py-3 bg-[#ff553c] text-white rounded-xl font-semibold hover:brightness-110 transition-all"
-              >
-                Try Again
-              </button>
+              <div className="flex flex-wrap gap-3">
+                {staleGtmSession && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      reconnectGoogleTagManager('/import/select').catch(() =>
+                        alert('Could not start GTM OAuth. Ensure you are logged in.')
+                      )
+                    }
+                    className="px-6 py-3 bg-[#41ffaf] text-[#003822] rounded-xl font-semibold hover:opacity-90 transition-all"
+                  >
+                    Reconnect Google Tag Manager
+                  </button>
+                )}
+                <button
+                  onClick={() => router.push('/import')}
+                  className="px-6 py-3 bg-[#ff553c] text-white rounded-xl font-semibold hover:brightness-110 transition-all"
+                >
+                  {staleGtmSession ? 'Back to connect' : 'Try Again'}
+                </button>
+              </div>
             </div>
           </section>
         </main>

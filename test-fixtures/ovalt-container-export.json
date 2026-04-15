@@ -1,0 +1,252 @@
+{
+  "exportFormatVersion": 2,
+  "exportTime": "2026-04-13T16:05:58.373Z",
+  "containerVersion": {
+    "path": "accounts/6347965337/containers/248366882/versions/0",
+    "accountId": "6347965337",
+    "containerId": "248366882",
+    "containerVersionId": "0",
+    "name": "E2E Test Export",
+    "container": {
+      "path": "accounts/6347965337/containers/248366882",
+      "accountId": "6347965337",
+      "containerId": "248366882",
+      "name": "ovalt.org",
+      "publicId": "GTM-NX4P4R3P",
+      "usageContext": [
+        "web"
+      ],
+      "fingerprint": "1775295264653",
+      "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces?apiLink=container",
+      "features": {
+        "supportUserPermissions": true,
+        "supportEnvironments": true,
+        "supportWorkspaces": true,
+        "supportGtagConfigs": false,
+        "supportBuiltInVariables": true,
+        "supportClients": false,
+        "supportFolders": true,
+        "supportTags": true,
+        "supportTemplates": true,
+        "supportTriggers": true,
+        "supportVariables": true,
+        "supportVersions": true,
+        "supportZones": true,
+        "supportTransformations": false
+      },
+      "tagIds": [
+        "GTM-NX4P4R3P"
+      ]
+    },
+    "tag": [
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/tags/58",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "tagId": "58",
+        "name": "Google Tag - GA4",
+        "type": "googtag",
+        "parameter": [
+          {
+            "type": "template",
+            "key": "tagId",
+            "value": "{{GA4 - ID}}"
+          },
+          {
+            "type": "boolean",
+            "key": "includeUserData",
+            "value": "false"
+          }
+        ],
+        "fingerprint": "1775415800000",
+        "firingTriggerId": [
+          "55"
+        ],
+        "tagFiringOption": "oncePerEvent",
+        "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces/12/tags/58?apiLink=tag",
+        "monitoringMetadata": {
+          "type": "map"
+        },
+        "consentSettings": {
+          "consentStatus": "notSet"
+        }
+      },
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/tags/62",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "tagId": "62",
+        "name": "GA4 - link clicks",
+        "type": "gaawe",
+        "parameter": [
+          {
+            "type": "boolean",
+            "key": "sendEcommerceData",
+            "value": "false"
+          },
+          {
+            "type": "template",
+            "key": "eventName",
+            "value": "click_{{DLV - gtm.elementText}}"
+          },
+          {
+            "type": "template",
+            "key": "measurementIdOverride",
+            "value": "{{GA4 - ID}}"
+          }
+        ],
+        "fingerprint": "1775415875952",
+        "firingTriggerId": [
+          "60"
+        ],
+        "tagFiringOption": "oncePerEvent",
+        "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces/12/tags/62?apiLink=tag",
+        "monitoringMetadata": {
+          "type": "map"
+        },
+        "consentSettings": {
+          "consentStatus": "notSet"
+        }
+      }
+    ],
+    "trigger": [
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/triggers/55",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "triggerId": "55",
+        "name": "DOM Ready",
+        "type": "domReady",
+        "fingerprint": "1775413643044",
+        "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces/12/triggers/55?apiLink=trigger"
+      },
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/triggers/60",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "triggerId": "60",
+        "name": "gtm.linkClick",
+        "type": "customEvent",
+        "customEventFilter": [
+          {
+            "type": "equals",
+            "parameter": [
+              {
+                "type": "template",
+                "key": "arg0",
+                "value": "{{_event}}"
+              },
+              {
+                "type": "template",
+                "key": "arg1",
+                "value": "gtm.linkClick"
+              }
+            ]
+          }
+        ],
+        "fingerprint": "1775415791435",
+        "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces/12/triggers/60?apiLink=trigger"
+      }
+    ],
+    "variable": [
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/variables/59",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "variableId": "59",
+        "name": "GA4 - ID",
+        "type": "c",
+        "parameter": [
+          {
+            "type": "template",
+            "key": "value",
+            "value": "G-KZH5011C22"
+          }
+        ],
+        "fingerprint": "1775415300379",
+        "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces/12/variables/59?apiLink=variable",
+        "formatValue": {}
+      },
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/variables/61",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "variableId": "61",
+        "name": "DLV - gtm.elementText",
+        "type": "v",
+        "parameter": [
+          {
+            "type": "integer",
+            "key": "dataLayerVersion",
+            "value": "2"
+          },
+          {
+            "type": "boolean",
+            "key": "setDefaultValue",
+            "value": "false"
+          },
+          {
+            "type": "template",
+            "key": "name",
+            "value": "gtm.elementText"
+          }
+        ],
+        "fingerprint": "1775415949731",
+        "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces/12/variables/61?apiLink=variable",
+        "formatValue": {
+          "caseConversionType": "lowercase"
+        }
+      }
+    ],
+    "builtInVariable": [
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/built_in_variables",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "type": "pageUrl",
+        "name": "Page URL"
+      },
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/built_in_variables",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "type": "pageHostname",
+        "name": "Page Hostname"
+      },
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/built_in_variables",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "type": "pagePath",
+        "name": "Page Path"
+      },
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/built_in_variables",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "type": "referrer",
+        "name": "Referrer"
+      },
+      {
+        "path": "accounts/6347965337/containers/248366882/workspaces/12/built_in_variables",
+        "accountId": "6347965337",
+        "containerId": "248366882",
+        "workspaceId": "12",
+        "type": "event",
+        "name": "Event"
+      }
+    ],
+    "fingerprint": "1776096358373",
+    "tagManagerUrl": "https://tagmanager.google.com/#/container/accounts/6347965337/containers/248366882/workspaces/12"
+  }
+}

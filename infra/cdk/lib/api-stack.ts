@@ -133,16 +133,6 @@ export class TagRelayApiStack extends cdk.Stack {
       })
     );
 
-    // Optional: Grant Bedrock access for AI-assisted mapping
-    if (environment === 'production') {
-      this.workerFunction.addToRolePolicy(
-        new iam.PolicyStatement({
-          actions: ['bedrock:InvokeModel'],
-          resources: ['*'],
-        })
-      );
-    }
-
     // ============================================
     // API Gateway HTTP API
     // ============================================

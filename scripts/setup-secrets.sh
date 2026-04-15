@@ -112,14 +112,6 @@ else
   GTM_OAUTH_REDIRECT_URI="http://localhost:3001/gtm/oauth/callback"
 fi
 
-# Optional external API keys
-echo "==================================="
-echo "Optional External Services"
-echo "==================================="
-echo ""
-read -p "Brave Search API Key (optional): " TAG_RELAY_BRAVE_SEARCH_API_KEY
-read -p "AWS Bedrock Model ID (optional): " TAG_RELAY_BEDROCK_MODEL_ID
-echo ""
 
 # Build secret JSON
 SECRET_VALUE=$(cat <<EOF
@@ -135,9 +127,7 @@ SECRET_VALUE=$(cat <<EOF
   "GTM_OAUTH_REDIRECT_URI": "${GTM_OAUTH_REDIRECT_URI}",
   "GITHUB_OAUTH_CLIENT_ID": "${GITHUB_OAUTH_CLIENT_ID}",
   "GITHUB_OAUTH_CLIENT_SECRET": "${GITHUB_OAUTH_CLIENT_SECRET}",
-  "GITHUB_OAUTH_REDIRECT_URI": "${GITHUB_OAUTH_REDIRECT_URI}",
-  "TAG_RELAY_BRAVE_SEARCH_API_KEY": "${TAG_RELAY_BRAVE_SEARCH_API_KEY}",
-  "TAG_RELAY_BEDROCK_MODEL_ID": "${TAG_RELAY_BEDROCK_MODEL_ID}"
+  "GITHUB_OAUTH_REDIRECT_URI": "${GITHUB_OAUTH_REDIRECT_URI}"
 }
 EOF
 )
@@ -181,10 +171,6 @@ echo "OAuth Configuration:"
 echo "  - Google OAuth (login): ${GOOGLE_OAUTH_CLIENT_ID:+✅}"
 echo "  - Google OAuth (GTM): ${GTM_OAUTH_CLIENT_ID:+✅}"
 echo "  - GitHub OAuth: ${GITHUB_OAUTH_CLIENT_ID:+✅}"
-echo ""
-echo "External Services:"
-echo "  - Brave Search: ${TAG_RELAY_BRAVE_SEARCH_API_KEY:+✅}"
-echo "  - Bedrock: ${TAG_RELAY_BEDROCK_MODEL_ID:+✅}"
 echo ""
 echo "==================================="
 echo "Next Steps"

@@ -69,14 +69,13 @@ export class TagRelayDomainStack extends cdk.Stack {
 
     // Same-origin path proxy: https://{domain}/sst/* → https://sst.{domain}/* (Stape-style, see
     // https://stape.io/helpdesk/documentation/how-to-use-same-origin-through-aws-cloudfront ).
-    // Required pieces: (1) strip the /sst prefix before calling the container (viewer CF function);
-    // (2) do not forward viewer Host to origin (ALL_VIEWER_EXCEPT_HOST_HEADER); (3) X-From-Cdn for Stape.
+    // Required: (1) strip /sst (viewer CF function); (2) ALL_VIEWER_EXCEPT_HOST_HEADER so Host is sst.*.
+    // Do not set Stape-only headers (e.g. X-From-Cdn: cft-stape) unless the container is Stape-hosted —
+    // Google-hosted sGTM can mis-handle them. X-Forwarded-Host helps the origin know the public apex.
     const sstSubdomain = `sst.${domainName}`;
     const sstOrigin = new origins.HttpOrigin(sstSubdomain, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
       customHeaders: {
-        // Stape: origin custom header so their edge recognizes CloudFront proxy traffic
-        'X-From-Cdn': 'cft-stape',
         'X-Forwarded-Host': domainName,
         'X-Forwarded-Proto': 'https',
       },

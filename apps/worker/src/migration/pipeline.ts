@@ -3,7 +3,7 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@
 import { buildTriggerNameLookup, buildVariableNameLookup, extractCanonicalTags, extractCanonicalVariables } from "./canonical.js";
 import { applyRuleset, aggregateConfidence, RULESET_VERSION } from "./engine/index.js";
 import { applyVariableRuleset, aggregateVariableConfidence } from "./engine/rules-variables.js";
-import { enrichMappingsWithWebAgent, parseMappingAgentEnv } from "./mappingAgent.js";
+// Removed: AI enrichment (Bedrock) - no longer needed with comprehensive type mappings
 import { buildMigrationReport } from "./buildReport.js";
 import { reportToMarkdown } from "./markdown.js";
 import { loadImportPayload } from "./loadImport.js";
@@ -99,15 +99,12 @@ export async function runMigrationPipeline(opts: {
     const variables = extractCanonicalVariables(payload);
 
     // Apply production ruleset engine for tags
-    const ruleMappings = applyRuleset(tags);
+    const mappings = applyRuleset(tags);
+    const { score, provisional } = aggregateConfidence(mappings);
 
     // Apply variable rules
     const variableMappings = applyVariableRuleset(variables);
     const variableStats = aggregateVariableConfidence(variableMappings);
-
-    // Enrich low-confidence mappings with web agent (optional)
-    const mappings = await enrichMappingsWithWebAgent(tags, ruleMappings, parseMappingAgentEnv(process.env));
-    const { score, provisional } = aggregateConfidence(mappings);
 
     // Build container summary
     const containerSummary = {

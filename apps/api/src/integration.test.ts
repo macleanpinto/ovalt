@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'vitest';
-import { buildServer } from './server';
+import { buildApp } from './server';
 import type { FastifyInstance } from 'fastify';
 
 describe('API Integration Tests', () => {
@@ -18,7 +18,7 @@ describe('API Integration Tests', () => {
     process.env.API_KEY = 'test-api-key';
     process.env.SERVICE_TOKEN = 'test-service-token';
 
-    app = await buildServer();
+    app = await buildApp();
     await app.ready();
   });
 
@@ -42,8 +42,8 @@ describe('API Integration Tests', () => {
     let authToken: string;
     const testUser = {
       email: `test-${Date.now()}@example.com`,
-      password: 'TestPassword123!',
       name: 'Test User',
+      organizationName: 'Test Organization',
     };
 
     test('POST /auth/register creates new user', async () => {
@@ -52,6 +52,10 @@ describe('API Integration Tests', () => {
         url: '/auth/register',
         payload: testUser,
       });
+
+      if (response.statusCode !== 201) {
+        console.log('Register failed:', response.statusCode, response.json());
+      }
 
       expect(response.statusCode).toBe(201);
       const body = response.json();
@@ -66,7 +70,6 @@ describe('API Integration Tests', () => {
         url: '/auth/login',
         payload: {
           email: testUser.email,
-          password: testUser.password,
         },
       });
 
@@ -77,6 +80,31 @@ describe('API Integration Tests', () => {
     });
 
     test('GET /auth/me returns user info', async () => {
+      if (!authToken) {
+        console.log('⚠️  authToken is undefined - registration may have failed');
+      } else {
+        console.log('✅ authToken exists:', authToken.substring(0, 20) + '...');
+      }
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/auth/me',
+        headers: {
+          authorization: `Bearer ${authToken}`,
+        },
+      });
+
+      if (response.statusCode !== 200) {
+        console.log('Auth failed:', response.statusCode, response.json());
+      }
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.user.email).toBe(testUser.email);
+      expect(body.organization).toBeDefined();
+    });
+
+    test('GET /auth/me returns organization info', async () => {
       const response = await app.inject({
         method: 'GET',
         url: '/auth/me',
@@ -87,22 +115,8 @@ describe('API Integration Tests', () => {
 
       expect(response.statusCode).toBe(200);
       const body = response.json();
-      expect(body.email).toBe(testUser.email);
-    });
-
-    test('GET /organizations returns user orgs', async () => {
-      const response = await app.inject({
-        method: 'GET',
-        url: '/organizations',
-        headers: {
-          authorization: `Bearer ${authToken}`,
-        },
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = response.json();
-      expect(Array.isArray(body)).toBe(true);
-      expect(body.length).toBeGreaterThan(0);
+      expect(body.organization).toBeDefined();
+      expect(body.organization.name).toBe(testUser.organizationName);
     });
   });
 

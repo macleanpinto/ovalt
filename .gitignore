@@ -11,3 +11,25 @@ apps/web-nextjs/.next/
 apps/web-nextjs/.open-next/
 *.zip
 
+# OAuth tokens and user-specific settings
+.gtm-tokens.json
+.claude/permissions.json
+
+# Local development scripts and helpers (except production scripts in scripts/)
+apps/api/*.sh
+apps/api/*.mjs
+apps/api/get-test-token.cjs
+apps/api/scripts/run-e2e-with-oauth.mjs
+scripts/export-ovalt-container.mjs
+
+# Local test documentation (not part of main docs)
+apps/api/E2E_TEST_QUICKSTART.md
+apps/api/TEST_SESSION_SUMMARY.md
+
+# Experimental/archived test files
+apps/api/src/browser-e2e-*.test.ts
+apps/api/src/e2e-real-import.test.ts
+apps/api/src/archived-tests/
+
+# HTML exports (use Next.js instead)
+apps/web-nextjs/public/*-light.html

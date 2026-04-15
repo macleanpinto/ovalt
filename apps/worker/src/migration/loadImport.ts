@@ -46,7 +46,27 @@ export async function loadImportPayload(opts: {
   if (!text) throw new Error("Empty S3 object for import");
 
   const json = JSON.parse(text) as unknown;
-  const parsed = gtmExportSchema.safeParse(json);
+
+  // Handle both formats:
+  // 1. Normalized format from /gtm/import-container: has entities.tags
+  // 2. Raw GTM export format from fixtures: has containerVersion.tag
+  let normalizedJson = json;
+  if (json && typeof json === "object" && "containerVersion" in json) {
+    const cv = (json as any).containerVersion;
+    if (cv && typeof cv === "object") {
+      normalizedJson = {
+        ...json,
+        entities: {
+          tags: cv.tag || [],
+          triggers: cv.trigger || [],
+          variables: cv.variable || [],
+          builtInVariables: cv.builtInVariable || []
+        }
+      };
+    }
+  }
+
+  const parsed = gtmExportSchema.safeParse(normalizedJson);
   if (!parsed.success) {
     throw new Error(`Import JSON validation failed: ${parsed.error.message}`);
   }

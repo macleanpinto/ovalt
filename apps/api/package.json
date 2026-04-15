@@ -5,9 +5,16 @@
   "type": "module",
   "scripts": {
     "setup:ovalt-gtm": "node scripts/setup-ovalt-gtm-engagement.mjs",
+    "setup:ovalt-gtm:create-workspace": "node scripts/setup-ovalt-gtm-engagement.mjs --create-workspace",
+    "setup:ovalt-gtm:reset": "node scripts/setup-ovalt-gtm-engagement.mjs --delete-all-tags --delete-all-triggers",
     "setup:ovalt-gtm:auth": "node scripts/setup-ovalt-gtm-engagement.mjs --authorize",
     "setup:ovalt-gtm:auth:save": "node scripts/setup-ovalt-gtm-engagement.mjs --authorize --write-env",
+    "test:e2e": "node scripts/run-e2e-with-oauth.mjs",
+    "test:api-e2e": "bash run-api-e2e-test.sh",
+    "test:e2e-publish": "npm test -- complete-e2e-with-publish.test.ts",
+    "test:browser-e2e": "npm test -- browser-e2e-test.test.ts",
     "dev": "tsx watch src/index.ts",
+    "dev:test": "NODE_ENV=test tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "build:lambda": "node build-lambda.js",
     "start": "node dist/index.js",
@@ -33,10 +40,12 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/aws-lambda": "^8.10.161",
     "@types/aws-lambda-fastify": "^1.4.5",
     "@types/node": "^22.0.0",
     "aws-sdk-client-mock": "^4.1.0",
+    "playwright": "^1.59.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"

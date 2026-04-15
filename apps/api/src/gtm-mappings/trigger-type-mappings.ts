@@ -188,7 +188,7 @@ export const SERVER_ONLY_TRIGGERS = [
   'customEvent',         // Fires on custom event names
   'eventNameEquals',     // Fires when event name matches
   'requestPath',         // Fires based on request path
-  'clientName',          // Fires based on client name
+  'always',              // sGTM UI "Custom": API type `always` + filter (e.g. Client Name equals GA4) — fires for every hit matching the filter
   'requestUrl',          // Fires based on request URL
   'container',           // Container-level trigger
 ];

@@ -44,6 +44,31 @@ Project memory and operating guide for AI coding sessions in this repository.
 - Keep docs in sync with code changes.
 - Prefer provider documentation evidence when assigning migration confidence.
 
+## Testing & Autonomous Work Permissions
+
+When working on tests and fixing issues, you may work autonomously without requesting approval for:
+- **Running tests**: `npm test`, `npm run test:e2e`, vitest commands
+- **Reading files**: Read, Grep, Glob operations to diagnose failures
+- **Fixing test code**: Edits to `*.test.ts`, `*.spec.ts`, test scripts
+- **Fixing production code**: Edits to implementation files when tests reveal bugs
+- **Updating documentation**: Changes to `*.md` files
+- **Safe bash commands**: cat, echo, grep, ls, tail, head, git status/diff
+
+When test failures occur, work autonomously:
+1. Run tests to identify failures
+2. Read source files to understand root cause
+3. Fix test code OR production code as needed
+4. Re-run tests
+5. Repeat until all tests pass
+6. Document what was fixed
+7. Report final results
+
+**User instruction:** "you can even modify code to fix issues"
+
+OAuth tokens for E2E tests are cached in `apps/api/.gtm-tokens.json` - no re-authentication needed between runs.
+
+See `apps/api/E2E_TEST_QUICKSTART.md` for testing details and `apps/api/TEST_SESSION_SUMMARY.md` for last test session results.
+
 ## GTM Migration System Principles
 
 This is a **generic migration system** for Google Tag Manager entities. The deployment/migration code must work for ANY GTM structure without hardcoded assumptions.

@@ -69,12 +69,12 @@ export function registerAuthRoutes(app: FastifyInstance, authService: AuthServic
       ipAddress: req.ip
     });
 
-    return {
+    return reply.code(201).send({
       user,
       organization,
       session,
       token
-    };
+    });
   });
 
   /**
