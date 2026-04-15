@@ -52,6 +52,10 @@ export interface Import {
   sourceType: string;
   status: string;
   createdAt: string;
+  gtm?: {
+    containerPath: string;
+    workspacePath: string;
+  };
 }
 
 export interface Run {
@@ -282,6 +286,10 @@ class APIClient {
     return this.request(`/migrations/${runId}/report`);
   }
 
+  async getImport(importId: string): Promise<Import> {
+    return this.request(`/imports/${importId}`);
+  }
+
   // Stats
   async getStats(organizationId: string): Promise<Stats> {
     const [imports, runs] = await Promise.all([
@@ -317,15 +325,19 @@ class APIClient {
   async deployApprovedTags(
     runId: string,
     approvedTagIds: string[],
+    clientContainerPath: string,
+    clientWorkspacePath: string,
     serverContainerPath: string,
     server_container_url: string,
     gtmSessionId: string
   ): Promise<any> {
-    return this.request(`/migrations/${runId}/deploy-approved`, {
+    return this.request(`/migrations/${runId}/deploy-approved-v2`, {
       method: 'POST',
       headers: { 'x-gtm-session': gtmSessionId },
       body: JSON.stringify({
         approvedTagIds,
+        clientContainerPath,
+        clientWorkspacePath,
         serverContainerPath,
         server_container_url
       })
