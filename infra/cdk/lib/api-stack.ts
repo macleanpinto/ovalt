@@ -180,7 +180,8 @@ export class TagRelayApiStack extends cdk.Stack {
       integration: lambdaIntegration,
     });
 
-    this.apiUrl = this.httpApi.url!;
+    // Use custom domain for production, raw API Gateway URL otherwise
+    this.apiUrl = environment === 'production' ? 'https://api.ovalt.org' : this.httpApi.url!;
 
     // OAuth redirect URIs are derived from this base in the API (see API_PUBLIC_BASE_URL in server.ts).
     const apiPublicBase =

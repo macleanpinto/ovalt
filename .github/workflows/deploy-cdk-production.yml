@@ -11,8 +11,10 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-north-1  # App region (API, Worker, Web)
+  CLOUDFRONT_REGION: us-east-1  # CloudFront region (Domain stack)
   ENVIRONMENT: production
+  PRODUCTION_API_URL: https://api.ovalt.org
 
 jobs:
   deploy:
@@ -53,7 +55,7 @@ jobs:
       - name: Build Next.js SSR
         working-directory: apps/web-nextjs
         env:
-          NEXT_PUBLIC_API_URL: ${{ vars.PRODUCTION_API_URL }}
+          NEXT_PUBLIC_API_URL: ${{ env.PRODUCTION_API_URL }}
         run: |
           npm ci
           npm run build:lambda
@@ -81,27 +83,59 @@ jobs:
       - name: Get Outputs
         id: outputs
         run: |
+          # Get API URL from eu-north-1
           API_URL=$(aws cloudformation describe-stacks \
             --stack-name tag-relay-api-${{ env.ENVIRONMENT }} \
+            --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
             --output text)
 
+          # Get Web URL from eu-north-1
           WEB_URL=$(aws cloudformation describe-stacks \
             --stack-name tag-relay-web-${{ env.ENVIRONMENT }} \
+            --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].Outputs[?OutputKey==`WebUrl`].OutputValue' \
+            --output text)
+
+          # Get CloudFront Distribution ID from us-east-1
+          CLOUDFRONT_DIST_ID=$(aws cloudformation describe-stacks \
+            --stack-name tag-relay-domain-${{ env.ENVIRONMENT }} \
+            --region ${{ env.CLOUDFRONT_REGION }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
             --output text)
 
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
           echo "web_url=$WEB_URL" >> $GITHUB_OUTPUT
+          echo "cloudfront_dist_id=$CLOUDFRONT_DIST_ID" >> $GITHUB_OUTPUT
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          echo "Invalidating CloudFront cache for distribution ${{ steps.outputs.outputs.cloudfront_dist_id }}"
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id ${{ steps.outputs.outputs.cloudfront_dist_id }} \
+            --paths "/*" \
+            --region ${{ env.CLOUDFRONT_REGION }} \
+            --query 'Invalidation.Id' \
+            --output text)
+          echo "CloudFront invalidation created: $INVALIDATION_ID"
+          echo "Cache invalidation in progress (takes 2-5 minutes)"
 
       - name: Deployment Summary
         run: |
           echo "### Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.AWS_REGION }} (app), ${{ env.CLOUDFRONT_REGION }} (CDN)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**API URL:** ${{ steps.outputs.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Web URL:** ${{ steps.outputs.outputs.web_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "### Production URLs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Website:** https://ovalt.org" >> $GITHUB_STEP_SUMMARY
+          echo "- **API:** https://api.ovalt.org" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Raw AWS URLs" >> $GITHUB_STEP_SUMMARY
+          echo "- **API (Lambda):** ${{ steps.outputs.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Web (Lambda):** ${{ steps.outputs.outputs.web_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **CloudFront:** E1MQZJXP61Z5TO" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ CloudFront cache invalidation in progress (2-5 minutes)" >> $GITHUB_STEP_SUMMARY
