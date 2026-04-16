@@ -291,6 +291,7 @@ const gtmSessions = new Map<string, GtmSession>();
 const GTM_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/tagmanager.readonly",
   "https://www.googleapis.com/auth/tagmanager.edit.containers",
+  "https://www.googleapis.com/auth/tagmanager.edit.containerversions",  // Required for workspace deletion
   "https://www.googleapis.com/auth/cloudplatformprojects.readonly",
   "https://www.googleapis.com/auth/cloud-platform"
 ] as const;
