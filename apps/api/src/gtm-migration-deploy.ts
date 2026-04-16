@@ -329,7 +329,7 @@ export async function deployMigrationWithExportImport(
       );
       updatedCount++;
       log.info({ tagName: tag.name, tagType: tag.type }, 'Updated tag with server routing');
-      await delay(200);
+      await delay(1000);
     } catch (err: any) {
       log.warn({ tagName: tag.name, err: err.message }, 'Failed to update tag, skipping');
     }
@@ -452,7 +452,7 @@ export async function deployMigrationWithExportImport(
       );
       serverVariableIdMap.set(variable.name!, created.data.variableId!);
       log.info({ variableName: variable.name, variableType: variable.type }, 'Created variable in server workspace');
-      await delay(200);
+      await delay(1000);
     } catch (err: any) {
       log.warn({ variableName: variable.name, err: err.message }, 'Failed to create variable in server, will continue without it');
     }
@@ -523,7 +523,7 @@ export async function deployMigrationWithExportImport(
       );
 
       blockingTriggers.push(blockingTrigger.data.triggerId!);
-      await delay(200);
+      await delay(1000);
     }
 
     blockingTriggersByCategory.set(category, blockingTriggers);
