@@ -618,9 +618,9 @@ export async function deployMigrationWithExportImport(
   }
 
   return {
-    clientWorkspacePath: newClientWorkspacePath,
-    clientWorkspaceName: CLIENT_WORKSPACE_NAME,
-    tagsModified: modifiedCount,
+    clientWorkspacePath: request.clientWorkspacePath,
+    clientWorkspaceName: request.clientWorkspacePath.split('/').pop() || 'workspace',
+    tagsModified: updatedCount,
     serverWorkspacePath,
     serverWorkspaceName: SERVER_WORKSPACE_NAME,
     serverTagsCreated
