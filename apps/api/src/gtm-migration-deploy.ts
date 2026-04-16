@@ -274,7 +274,7 @@ export async function deployMigrationWithExportImport(
         })
       );
       triggerIdMap.set(trigger.triggerId!, created.data.triggerId!);
-      await delay(1000);
+      await delay(2500);
     } catch (err: any) {
       log.warn({ triggerName: trigger.name, err: err.message }, 'Failed to create trigger, skipping');
     }
@@ -297,7 +297,7 @@ export async function deployMigrationWithExportImport(
         })
       );
       variableIdMap.set(variable.variableId!, created.data.variableId!);
-      await delay(1000);
+      await delay(2500);
     } catch (err: any) {
       log.warn({ variableName: variable.name, err: err.message }, 'Failed to create variable, skipping');
     }
@@ -334,7 +334,7 @@ export async function deployMigrationWithExportImport(
         })
       );
       tagsCreated++;
-      await delay(1000);
+      await delay(2500);
     } catch (err: any) {
       log.warn({ tagName: tag.name, err: err.message }, 'Failed to create tag, skipping');
     }
@@ -462,7 +462,7 @@ export async function deployMigrationWithExportImport(
       );
       serverVariableIdMap.set(variable.name!, created.data.variableId!);
       log.info({ variableName: variable.name, variableType: variable.type }, 'Created variable in server workspace');
-      await delay(1000);
+      await delay(2500);
     } catch (err: any) {
       log.warn({ variableName: variable.name, err: err.message }, 'Failed to create variable in server, will continue without it');
     }
@@ -533,7 +533,7 @@ export async function deployMigrationWithExportImport(
       );
 
       blockingTriggers.push(blockingTrigger.data.triggerId!);
-      await delay(1000);
+      await delay(2500);
     }
 
     blockingTriggersByCategory.set(category, blockingTriggers);
