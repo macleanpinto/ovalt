@@ -296,154 +296,46 @@ export async function deployMigrationWithExportImport(
   log.info({ modifiedCount }, 'Modified tags with server routing');
 
   // ================================================================
-  // STEP 3: Create new "Ovalt Migration Workspace" and copy entities
+  // STEP 3: Update existing tags in original workspace
   // ================================================================
-  const CLIENT_WORKSPACE_NAME = 'Ovalt Migration Workspace';
-  log.info({ workspaceName: CLIENT_WORKSPACE_NAME }, 'Creating new client workspace');
+  log.info({ workspace: request.clientWorkspacePath }, 'Updating tags in original workspace');
 
-  // Delete existing migration workspace if it exists
-  const existingWorkspaces = await gtmCall(log, 'workspaces.list', () =>
-    tm.accounts.containers.workspaces.list({ parent: request.clientContainerPath })
-  );
-
-  const migrationWorkspace = existingWorkspaces.data.workspace?.find(
-    (w: any) => w.name === CLIENT_WORKSPACE_NAME
-  );
-
-  if (migrationWorkspace?.path) {
-    log.info({ path: migrationWorkspace.path }, 'Deleting existing client migration workspace');
-    await gtmCall(log, 'workspaces.delete', () =>
-      tm.accounts.containers.workspaces.delete({ path: migrationWorkspace.path! })
-    );
-    // Wait longer for GTM API to fully process deletion
-    log.info('Waiting for workspace deletion to complete...');
-    await delay(3000);
-
-    // Verify deletion completed
-    const verifyWorkspaces = await gtmCall(log, 'workspaces.list', () =>
-      tm.accounts.containers.workspaces.list({ parent: request.clientContainerPath })
-    );
-    const stillExists = verifyWorkspaces.data.workspace?.find((w: any) => w.name === CLIENT_WORKSPACE_NAME);
-    if (stillExists) {
-      log.warn('Workspace still exists after deletion, waiting additional time...');
-      await delay(2000);
-    }
-  }
-
-  // Create new workspace
-  const newClientWorkspace = await gtmCall(log, 'workspaces.create', () =>
-    tm.accounts.containers.workspaces.create({
-      parent: request.clientContainerPath,
-      requestBody: {
-        name: CLIENT_WORKSPACE_NAME,
-        description: 'Client-side tags modified to route to server-side GTM. Created by Ovalt.'
-      }
-    })
-  );
-
-  const newClientWorkspacePath = newClientWorkspace.data.path!;
-  log.info({ workspacePath: newClientWorkspacePath }, 'Created new client workspace');
-
-  // Copy all entities to new workspace with unique names to avoid conflicts
-  // Create triggers first (tags may depend on them)
-  // Map old trigger IDs to new ones
-  const triggerIdMap = new Map<string, string>();
-
-  for (const trigger of originalTriggers) {
-    try {
-      // Add unique suffix to avoid name conflicts
-      const uniqueName = `${trigger.name} (Migrated)`;
-
-      const created = await gtmCall(log, 'triggers.create', () =>
-        tm.accounts.containers.workspaces.triggers.create({
-          parent: newClientWorkspacePath,
-          requestBody: {
-            name: uniqueName,
-            type: trigger.type,
-            customEventFilter: trigger.customEventFilter,
-            filter: trigger.filter,
-            autoEventFilter: trigger.autoEventFilter,
-            notes: trigger.notes
-          }
-        })
-      );
-      triggerIdMap.set(trigger.triggerId!, created.data.triggerId!);
-      await delay(200); // Rate limiting
-    } catch (err: any) {
-      log.warn({ triggerName: trigger.name, err: err.message }, 'Failed to create trigger, skipping');
-    }
-  }
-
-  // Create variables with unique names
-  const variableIdMap = new Map<string, string>();
-
-  for (const variable of originalVariables) {
-    try {
-      const uniqueName = `${variable.name} (Migrated)`;
-
-      const created = await gtmCall(log, 'variables.create', () =>
-        tm.accounts.containers.workspaces.variables.create({
-          parent: newClientWorkspacePath,
-          requestBody: {
-            name: uniqueName,
-            type: variable.type,
-            parameter: variable.parameter,
-            notes: variable.notes
-          }
-        })
-      );
-      variableIdMap.set(variable.variableId!, created.data.variableId!);
-      await delay(200);
-    } catch (err: any) {
-      log.warn({ variableName: variable.name, err: err.message }, 'Failed to create variable, skipping');
-    }
-  }
-
-  // Create modified tags with unique names and remapped trigger IDs
-  let tagsCreated = 0;
+  let updatedCount = 0;
   for (const tag of modifiedTags) {
+    // Only update approved tags that were actually modified
+    const category = getTagCategory(tag.type);
+    if (!category || !request.approvedTagIds.includes(tag.tagId)) {
+      continue;
+    }
+
     try {
-      const uniqueName = `${tag.name} (Migrated)`;
-
-      // Remap trigger IDs to new workspace
-      const firingTriggerIds = tag.firingTriggerId?.map((id: string) =>
-        triggerIdMap.get(id) || id
-      ).filter(Boolean);
-
-      const blockingTriggerIds = tag.blockingTriggerId?.map((id: string) =>
-        triggerIdMap.get(id) || id
-      ).filter(Boolean);
-
-      await gtmCall(log, 'tags.create', () =>
-        tm.accounts.containers.workspaces.tags.create({
-          parent: newClientWorkspacePath,
+      await gtmCall(log, 'tags.update', () =>
+        tm.accounts.containers.workspaces.tags.update({
+          path: tag.path,
           requestBody: {
-            name: uniqueName,
+            name: tag.name,  // Keep original name
             type: tag.type,
-            parameter: tag.parameter,
-            firingTriggerId: firingTriggerIds?.length ? firingTriggerIds : undefined,
-            blockingTriggerId: blockingTriggerIds?.length ? blockingTriggerIds : undefined,
+            parameter: tag.parameter,  // Updated parameters with transport_url
+            firingTriggerId: tag.firingTriggerId,
+            blockingTriggerId: tag.blockingTriggerId,
             priority: tag.priority,
             tagFiringOption: tag.tagFiringOption,
             monitoringMetadata: tag.monitoringMetadata,
             consentSettings: tag.consentSettings,
-            notes: tag.notes
+            notes: tag.notes,
+            fingerprint: tag.fingerprint  // Required for updates
           }
         })
       );
-      tagsCreated++;
+      updatedCount++;
+      log.info({ tagName: tag.name, tagType: tag.type }, 'Updated tag with server routing');
       await delay(200);
     } catch (err: any) {
-      log.warn({ tagName: tag.name, err: err.message }, 'Failed to create tag, skipping');
+      log.warn({ tagName: tag.name, err: err.message }, 'Failed to update tag, skipping');
     }
   }
 
-  log.info({
-    modifiedCount,
-    triggersCreated: triggerIdMap.size,
-    variablesCreated: variableIdMap.size,
-    tagsCreated
-  }, 'Copied and modified all entities to new workspace');
+  log.info({ updatedCount }, 'Updated tags in original workspace');
 
   // ================================================================
   // STEP 4: Create consolidated server tags
