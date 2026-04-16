@@ -289,11 +289,23 @@ export async function deployMigrationWithExportImport(
   );
 
   if (migrationWorkspace?.path) {
-    log.info({ path: migrationWorkspace.path }, 'Deleting existing migration workspace');
+    log.info({ path: migrationWorkspace.path }, 'Deleting existing client migration workspace');
     await gtmCall(log, 'workspaces.delete', () =>
       tm.accounts.containers.workspaces.delete({ path: migrationWorkspace.path! })
     );
-    await delay(1500);
+    // Wait longer for GTM API to fully process deletion
+    log.info('Waiting for workspace deletion to complete...');
+    await delay(3000);
+
+    // Verify deletion completed
+    const verifyWorkspaces = await gtmCall(log, 'workspaces.list', () =>
+      tm.accounts.containers.workspaces.list({ parent: request.clientContainerPath })
+    );
+    const stillExists = verifyWorkspaces.data.workspace?.find((w: any) => w.name === CLIENT_WORKSPACE_NAME);
+    if (stillExists) {
+      log.warn('Workspace still exists after deletion, waiting additional time...');
+      await delay(2000);
+    }
   }
 
   // Create new workspace
@@ -426,11 +438,23 @@ export async function deployMigrationWithExportImport(
   );
 
   if (existingServerWorkspace?.path) {
-    log.info({ path: existingServerWorkspace.path }, 'Deleting existing server workspace');
+    log.info({ path: existingServerWorkspace.path }, 'Deleting existing server migration workspace');
     await gtmCall(log, 'workspaces.delete', () =>
       tm.accounts.containers.workspaces.delete({ path: existingServerWorkspace.path! })
     );
-    await delay(1500);
+    // Wait longer for GTM API to fully process deletion
+    log.info('Waiting for workspace deletion to complete...');
+    await delay(3000);
+
+    // Verify deletion completed
+    const verifyServerWorkspaces = await gtmCall(log, 'workspaces.list', () =>
+      tm.accounts.containers.workspaces.list({ parent: request.serverContainerPath })
+    );
+    const stillExists = verifyServerWorkspaces.data.workspace?.find((w: any) => w.name === SERVER_WORKSPACE_NAME);
+    if (stillExists) {
+      log.warn('Server workspace still exists after deletion, waiting additional time...');
+      await delay(2000);
+    }
   }
 
   const serverWorkspace = await gtmCall(log, 'workspaces.create', () =>
