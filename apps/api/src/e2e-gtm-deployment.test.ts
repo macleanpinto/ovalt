@@ -524,14 +524,14 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
 
       console.log(`      Tags: ${clientTags.data.tag?.length || 0}`);
 
-      // Check if tags have transport_url
+      // Check if tags have transport_url or server_container_url
       let modifiedTagsCount = 0;
       if (clientTags.data.tag) {
         for (const tag of clientTags.data.tag) {
-          // Check for transport_url in three formats:
+          // Check for transport_url or server_container_url in three formats:
           // 1. Direct parameter (for gaawc, googads)
           const hasDirectServerRouting = tag.parameter?.some((p: any) =>
-            p.key === 'transport_url' && p.value === SERVER_CONTAINER_URL
+            (p.key === 'transport_url' || p.key === 'server_container_url') && p.value === SERVER_CONTAINER_URL
           );
 
           // 2. In configSettingsTable (for googtag)
@@ -539,7 +539,7 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
           const hasConfigServerRouting = configSettingsTable?.list?.some((item: any) => {
             const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
             const paramValue = item.map?.find((m: any) => m.key === 'parameterValue')?.value;
-            return paramKey === 'transport_url' && paramValue === SERVER_CONTAINER_URL;
+            return (paramKey === 'transport_url' || paramKey === 'server_container_url') && paramValue === SERVER_CONTAINER_URL;
           });
 
           // 3. In eventSettingsTable (for gaawe - Event Parameters table in GTM UI)
@@ -547,7 +547,7 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
           const hasEventServerRouting = eventSettingsTable?.list?.some((item: any) => {
             const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
             const paramValue = item.map?.find((m: any) => m.key === 'parameterValue')?.value;
-            return paramKey === 'transport_url' && paramValue === SERVER_CONTAINER_URL;
+            return (paramKey === 'transport_url' || paramKey === 'server_container_url') && paramValue === SERVER_CONTAINER_URL;
           });
 
           const hasServerRouting = hasDirectServerRouting || hasConfigServerRouting || hasEventServerRouting;
@@ -563,7 +563,7 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
       // Critical verification: At least one tag must have server routing configured
       expect(modifiedTagsCount).toBeGreaterThan(0);
       if (modifiedTagsCount === 0) {
-        throw new Error('VERIFICATION FAILED: No client tags were modified with transport_url. The migration did not add server routing to any tags.');
+        throw new Error('VERIFICATION FAILED: No client tags were modified with transport_url or server_container_url. The migration did not add server routing to any tags.');
       }
     } else {
       console.log('   ⚠️  Client migration workspace not found\n');
