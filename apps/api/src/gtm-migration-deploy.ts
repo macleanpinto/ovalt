@@ -94,8 +94,8 @@ function mapClientTypeToServerType(clientType: string): string | null {
     'gaawe': 'sgtmgaaw',      // GA4 Event → Server GA4
     'googtag': 'sgtmgaaw',    // Google Tag → Server GA4
     'gaawc': 'sgtmgaaw',      // GA4 Config → Server GA4
-    'awct': 'sgtmgads',       // Ads Conversion → Server Ads
-    'sp': 'sgtmgads',         // Ads Remarketing → Server Ads
+    // Note: Google Ads (awct, sp) don't have built-in server-side templates
+    // Google Ads conversions are typically tracked through GA4 events on server-side
     // Add more mappings as needed
   };
 
