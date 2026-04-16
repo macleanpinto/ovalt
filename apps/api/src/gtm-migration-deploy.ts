@@ -3,21 +3,28 @@
  *
  * This module handles the deployment of migrated tags:
  * 1. Fetch all tags/triggers/variables from client workspace
- * 2. Modify ONLY GA4 tags to add server_container_url parameter
- * 3. Update GA4 tags in-place in the original client workspace
+ * 2. Modify ONLY GA4 Config tags (googtag) to add server_container_url
+ * 3. Update GA4 Config tags in-place in the original client workspace
  * 4. Create new "Ovalt Migration Workspace" in server container
  * 5. Copy required variables to server workspace
  * 6. Create consolidated server tags (one per tag type)
  *
- * CLIENT CONTAINER:
- * - Modifies ONLY GA4 tags directly in the existing workspace
+ * CLIENT CONTAINER (per Stape.io official documentation):
+ * - Modifies ONLY GA4 Config tags (googtag type)
+ * - Adds server_container_url to configSettingsTable
+ * - GA4 Event tags (gaawe) automatically inherit config - NO modification needed
  * - Google Ads tags are NOT modified (they work through GA4 server infrastructure)
- * - Adds server_container_url to eventSettingsTable on GA4 tags
  *
  * SERVER CONTAINER:
  * - Creates new "Ovalt Migration Workspace"
  * - Creates consolidated tags (one per tag type: GA4, Google Ads, etc.)
  * - Google Ads conversions automatically flow through GA4 server tags
+ *
+ * TAG TYPE BEHAVIOR:
+ * - googtag (GA4 Config): Modified with server_container_url in configSettingsTable
+ * - gaawe (GA4 Event): Inherits from config - no modification
+ * - gaawc (GA4 Configuration): Deprecated - no modification
+ * - awct, sp (Google Ads): Work through GA4 on server - no modification
  *
  * GOOGLE ADS BEHAVIOR:
  * - Google Ads server-side conversions work EXCLUSIVELY through GA4 infrastructure
@@ -161,51 +168,52 @@ export async function deployMigrationWithExportImport(
   }, 'Fetched client workspace entities');
 
   // ================================================================
-  // STEP 2: Modify ONLY GA4 tags to add server_container_url
+  // STEP 2: Modify ONLY GA4 Config tags (googtag) to add server_container_url
   // ================================================================
-  // Note: Google Ads conversions work through GA4 infrastructure on server-side
-  // Google Ads tags should NOT be routed to server directly
-  log.info({ serverUrl: request.serverContainerUrl }, 'Modifying GA4 tags to add server routing');
+  // Per Stape.io documentation:
+  // - Only GA4 Config tags (googtag type) need server_container_url in configSettingsTable
+  // - GA4 Event tags (gaawe) automatically inherit this setting from config
+  // - Google Ads tags work through GA4 infrastructure on server-side
+  log.info({ serverUrl: request.serverContainerUrl }, 'Modifying GA4 Config tags to add server routing');
 
   let modifiedCount = 0;
   const modifiedTags = originalTags.map((tag: any) => {
-    // Only modify approved GA4 tags
+    // Only modify approved tags
     if (!request.approvedTagIds.includes(tag.tagId)) {
       return tag;
     }
 
-    const category = getTagCategory(tag.type);
-
-    // Only modify GA4 tags - Google Ads tags work through GA4 on server-side
-    if (category !== 'ga4') {
-      log.info({ tagName: tag.name, tagType: tag.type, category }, 'Skipping non-GA4 tag (will use GA4 server infrastructure)');
+    // Only modify GA4 Config tags (googtag type)
+    // Skip: gaawe (inherits from config), gaawc (deprecated), Google Ads tags
+    if (tag.type !== 'googtag') {
+      log.info({ tagName: tag.name, tagType: tag.type }, 'Skipping tag - not a GA4 Config tag');
       return tag;
     }
 
     const parameters = [...(tag.parameter || [])];
 
-    // For GA4 tags: Add server_container_url to event settings/parameters
-    // Find or create the eventSettingsTable list
-    let eventSettingsTable = parameters.find((p: any) => p.key === 'eventSettingsTable');
+    // For GA4 Config tags: Add server_container_url to configSettingsTable
+    let configSettingsTable = parameters.find((p: any) => p.key === 'configSettingsTable');
 
-    if (!eventSettingsTable) {
-      eventSettingsTable = {
+    if (!configSettingsTable) {
+      // Create configSettingsTable if it doesn't exist
+      configSettingsTable = {
         type: 'list',
-        key: 'eventSettingsTable',
+        key: 'configSettingsTable',
         list: []
       };
-      parameters.push(eventSettingsTable);
+      parameters.push(configSettingsTable);
     }
 
     // Remove existing server_container_url if present
-    if (eventSettingsTable.list) {
-      eventSettingsTable.list = eventSettingsTable.list.filter((item: any) => {
+    if (configSettingsTable.list) {
+      configSettingsTable.list = configSettingsTable.list.filter((item: any) => {
         const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
         return paramKey !== 'server_container_url';
       });
 
-      // Add server_container_url as event parameter
-      eventSettingsTable.list.push({
+      // Add server_container_url to configSettingsTable
+      configSettingsTable.list.push({
         type: 'map',
         map: [
           { type: 'template', key: 'parameter', value: 'server_container_url' },
@@ -223,25 +231,23 @@ export async function deployMigrationWithExportImport(
     };
   });
 
-  log.info({ modifiedCount }, 'Modified GA4 tags with server routing');
+  log.info({ modifiedCount }, 'Modified GA4 Config tags with server routing');
 
   // ================================================================
-  // STEP 3: Update existing GA4 tags in the original workspace
+  // STEP 3: Update existing GA4 Config tags in the original workspace
   // ================================================================
-  log.info({ workspace: request.clientWorkspacePath }, 'Updating GA4 tags in original workspace');
+  log.info({ workspace: request.clientWorkspacePath }, 'Updating GA4 Config tags in original workspace');
 
   let updatedCount = 0;
   for (const tag of modifiedTags) {
-    // Only update approved GA4 tags that were actually modified
+    // Only update approved tags that were actually modified
     if (!request.approvedTagIds.includes(tag.tagId)) {
       continue;
     }
 
-    const category = getTagCategory(tag.type);
-
-    // Only update GA4 tags
-    if (category !== 'ga4') {
-      log.info({ tagName: tag.name, tagType: tag.type }, 'Skipping non-GA4 tag update');
+    // Only update GA4 Config tags (googtag)
+    if (tag.type !== 'googtag') {
+      log.info({ tagName: tag.name, tagType: tag.type }, 'Skipping tag - not a GA4 Config tag');
       continue;
     }
 
@@ -252,7 +258,7 @@ export async function deployMigrationWithExportImport(
           requestBody: {
             name: tag.name,
             type: tag.type,
-            parameter: tag.parameter,  // Updated parameters with server_container_url
+            parameter: tag.parameter,  // Updated configSettingsTable with server_container_url
             firingTriggerId: tag.firingTriggerId,
             blockingTriggerId: tag.blockingTriggerId,
             priority: tag.priority,
@@ -265,14 +271,14 @@ export async function deployMigrationWithExportImport(
         })
       );
       updatedCount++;
-      log.info({ tagName: tag.name, tagType: tag.type }, 'Updated GA4 tag with server routing');
+      log.info({ tagName: tag.name, tagType: tag.type }, 'Updated GA4 Config tag with server routing');
       await delay(2500);
     } catch (err: any) {
       log.warn({ tagName: tag.name, err: err.message }, 'Failed to update tag, skipping');
     }
   }
 
-  log.info({ updatedCount }, 'Updated GA4 tags in original workspace');
+  log.info({ updatedCount }, 'Updated GA4 Config tags in original workspace');
 
   // ================================================================
   // STEP 4: Create consolidated server tags
