@@ -152,141 +152,50 @@ export async function deployMigrationWithExportImport(
   }, 'Fetched client workspace entities');
 
   // ================================================================
-  // STEP 2: Modify tags to add transport_url
+  // STEP 2: Modify ALL approved tags to add server_container_url
   // ================================================================
   log.info({ serverUrl: request.serverContainerUrl }, 'Modifying tags to add server routing');
 
   let modifiedCount = 0;
   const modifiedTags = originalTags.map((tag: any) => {
-    const category = getTagCategory(tag.type);
-    if (!category || !request.approvedTagIds.includes(tag.tagId)) {
+    // Only modify approved tags
+    if (!request.approvedTagIds.includes(tag.tagId)) {
       return tag;
     }
 
     const parameters = [...(tag.parameter || [])];
 
-    // Add server routing based on tag type
-    if (category === 'ga4' && tag.type === 'googtag') {
-      // For Google Tag (googtag), add transport_url to configSettingsTable
-      let configSettingsTable = parameters.find((p: any) => p.key === 'configSettingsTable');
+    // For ALL tags: Add server_container_url to event settings/parameters
+    // Find or create the eventSettingsTable list
+    let eventSettingsTable = parameters.find((p: any) => p.key === 'eventSettingsTable');
 
-      if (!configSettingsTable) {
-        // Create configSettingsTable if it doesn't exist
-        configSettingsTable = {
-          type: 'list',
-          key: 'configSettingsTable',
-          list: []
-        };
-        parameters.push(configSettingsTable);
-      }
-
-      // Remove existing transport_url and server_container_url if present
-      if (configSettingsTable.list) {
-        configSettingsTable.list = configSettingsTable.list.filter((item: any) => {
-          const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
-          return paramKey !== 'transport_url' && paramKey !== 'server_container_url';
-        });
-
-        // Add both transport_url and server_container_url for safety
-        configSettingsTable.list.push(
-          {
-            type: 'map',
-            map: [
-              { type: 'template', key: 'parameter', value: 'transport_url' },
-              { type: 'template', key: 'parameterValue', value: request.serverContainerUrl }
-            ]
-          },
-          {
-            type: 'map',
-            map: [
-              { type: 'template', key: 'parameter', value: 'server_container_url' },
-              { type: 'template', key: 'parameterValue', value: request.serverContainerUrl }
-            ]
-          }
-        );
-      }
-
-      modifiedCount++;
-    } else if (category === 'ga4' && tag.type === 'gaawe') {
-      // For GA4 Event (gaawe), add transport_url to the Event Parameters table
-      // Key: 'eventSettingsTable' (NOT 'eventParameters')
-      // Map keys: 'parameter'/'parameterValue' (NOT 'name'/'value')
-      // This is the correct structure that GTM UI expects
-
-      // Find or create the eventSettingsTable list
-      let eventSettingsTable = parameters.find((p: any) => p.key === 'eventSettingsTable');
-
-      if (!eventSettingsTable) {
-        eventSettingsTable = {
-          type: 'list',
-          key: 'eventSettingsTable',
-          list: []
-        };
-        parameters.push(eventSettingsTable);
-      }
-
-      // Remove existing transport_url and server_container_url if present
-      if (eventSettingsTable.list) {
-        eventSettingsTable.list = eventSettingsTable.list.filter((item: any) => {
-          const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
-          return paramKey !== 'transport_url' && paramKey !== 'server_container_url';
-        });
-
-        // Add both transport_url and server_container_url as event parameters
-        // Structure: list of maps with 'parameter' and 'parameterValue' keys
-        eventSettingsTable.list.push(
-          {
-            type: 'map',
-            map: [
-              { type: 'template', key: 'parameter', value: 'transport_url' },
-              { type: 'template', key: 'parameterValue', value: request.serverContainerUrl }
-            ]
-          },
-          {
-            type: 'map',
-            map: [
-              { type: 'template', key: 'parameter', value: 'server_container_url' },
-              { type: 'template', key: 'parameterValue', value: request.serverContainerUrl }
-            ]
-          }
-        );
-      }
-
-      log.info({
-        tagName: tag.name,
-        tagType: tag.type,
-        parameterKey: 'eventSettingsTable'
-      }, 'Added transport_url and server_container_url to GA4 Event tag');
-
-      modifiedCount++;
-    } else if (category === 'ga4' && tag.type === 'gaawc') {
-      // For GA4 Config (gaawc), add as direct parameters
-      const filtered = parameters.filter((p: any) =>
-        p.key !== 'transport_url' && p.key !== 'transportUrl' && p.key !== 'server_container_url'
-      );
-      filtered.push(
-        { type: 'template', key: 'transport_url', value: request.serverContainerUrl },
-        { type: 'template', key: 'transportUrl', value: request.serverContainerUrl },
-        { type: 'template', key: 'server_container_url', value: request.serverContainerUrl }
-      );
-      return {
-        ...tag,
-        parameter: filtered,
-        notes: (tag.notes || '') + `\n\n[Modified by Tag Relay] Routes to server: ${request.serverContainerUrl}`
+    if (!eventSettingsTable) {
+      eventSettingsTable = {
+        type: 'list',
+        key: 'eventSettingsTable',
+        list: []
       };
-    } else if (category === 'googads') {
-      // For Google Ads tags, add as direct parameter
-      const filtered = parameters.filter((p: any) => p.key !== 'transport_url' && p.key !== 'server_container_url');
-      filtered.push(
-        { type: 'template', key: 'transport_url', value: request.serverContainerUrl },
-        { type: 'template', key: 'server_container_url', value: request.serverContainerUrl }
-      );
-      return {
-        ...tag,
-        parameter: filtered,
-        notes: (tag.notes || '') + `\n\n[Modified by Tag Relay] Routes to server: ${request.serverContainerUrl}`
-      };
+      parameters.push(eventSettingsTable);
     }
+
+    // Remove existing server_container_url if present
+    if (eventSettingsTable.list) {
+      eventSettingsTable.list = eventSettingsTable.list.filter((item: any) => {
+        const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
+        return paramKey !== 'server_container_url';
+      });
+
+      // Add server_container_url as event parameter
+      eventSettingsTable.list.push({
+        type: 'map',
+        map: [
+          { type: 'template', key: 'parameter', value: 'server_container_url' },
+          { type: 'template', key: 'parameterValue', value: request.serverContainerUrl }
+        ]
+      });
+    }
+
+    modifiedCount++;
 
     return {
       ...tag,
