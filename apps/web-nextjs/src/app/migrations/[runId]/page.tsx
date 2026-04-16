@@ -111,7 +111,7 @@ export default function MigrationWorkspace() {
   const [clientContainerPath, setClientContainerPath] = useState('');
   const [clientWorkspacePath, setClientWorkspacePath] = useState('');
   const [serverContainerPath, setServerContainerPath] = useState('');
-  const [server_container_url, setserver_container_url] = useState('');
+  const [transport_url, settransport_url] = useState('');
   const [serverContainers, setServerContainers] = useState<any[]>([]);
   const [loadingContainers, setLoadingContainers] = useState(false);
   const [containerMode, setContainerMode] = useState<'existing' | 'create' | null>(null);
@@ -1454,7 +1454,7 @@ export default function MigrationWorkspace() {
                           setServerContainerPath(selectedPath);
                           const selectedContainer = serverContainers.find((c) => c.path === selectedPath);
                           const url = selectedContainer?.taggingServerUrls?.[0] || '';
-                          setserver_container_url(url);
+                          settransport_url(url);
                           if (url) addLog(`✅ Server container URL: ${url}`);
                           else addLog('⚠️ No tagging URL found for this container.');
                         }}
@@ -1631,7 +1631,7 @@ export default function MigrationWorkspace() {
                       addLog(`🚀 Starting deployment of ${approvedTags.size} approved tag(s)...`);
                       addLog(`📦 Client container: ${clientContainerPath}`);
                       addLog(`📦 Server container: ${serverContainerPath}`);
-                      if (server_container_url) addLog(`🌐 Server URL: ${server_container_url}`);
+                      if (transport_url) addLog(`🌐 Server URL: ${transport_url}`);
                       try {
                         const gtmSessionId = getGtmSession();
                         if (!gtmSessionId) {
@@ -1647,7 +1647,7 @@ export default function MigrationWorkspace() {
                           clientContainerPath,
                           clientWorkspacePath,
                           serverContainerPath,
-                          server_container_url,
+                          transport_url,
                           gtmSessionId
                         );
                         processDeploymentResult(result);

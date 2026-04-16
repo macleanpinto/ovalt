@@ -73,7 +73,7 @@ export interface Run {
     failed: number;
     deployedTagIds: string[];
     serverContainerPath: string;
-    server_container_url: string;
+    transport_url: string;
     workspacePath: string;
   }>;
   lastDeployedAt?: string;
@@ -328,7 +328,7 @@ class APIClient {
     clientContainerPath: string,
     clientWorkspacePath: string,
     serverContainerPath: string,
-    server_container_url: string,
+    transport_url: string,
     gtmSessionId: string
   ): Promise<any> {
     return this.request(`/migrations/${runId}/deploy-approved-v2`, {
@@ -339,7 +339,7 @@ class APIClient {
         clientContainerPath,
         clientWorkspacePath,
         serverContainerPath,
-        server_container_url
+        transport_url
       })
     });
   }

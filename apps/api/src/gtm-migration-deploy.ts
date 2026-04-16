@@ -3,7 +3,7 @@
  *
  * This module handles the deployment of migrated tags:
  * 1. Fetch all tags/triggers/variables from client workspace
- * 2. Modify tags to add server_container_url
+ * 2. Modify tags to add transport_url
  * 3. Create new "Ovalt Migration Workspace" in client container with modified tags
  * 4. Create new "Ovalt Migration Workspace" in server container
  * 5. Copy required variables to server workspace
@@ -150,7 +150,7 @@ export async function deployMigrationWithExportImport(
   }, 'Fetched client workspace entities');
 
   // ================================================================
-  // STEP 2: Modify tags to add server_container_url
+  // STEP 2: Modify tags to add transport_url
   // ================================================================
   log.info({ serverUrl: request.serverContainerUrl }, 'Modifying tags to add server routing');
 
@@ -165,7 +165,7 @@ export async function deployMigrationWithExportImport(
 
     // Add server routing based on tag type
     if (category === 'ga4' && tag.type === 'googtag') {
-      // For Google Tag (googtag), add server_container_url to configSettingsTable
+      // For Google Tag (googtag), add transport_url to configSettingsTable
       let configSettingsTable = parameters.find((p: any) => p.key === 'configSettingsTable');
 
       if (!configSettingsTable) {
@@ -178,18 +178,18 @@ export async function deployMigrationWithExportImport(
         parameters.push(configSettingsTable);
       }
 
-      // Remove existing server_container_url if present
+      // Remove existing transport_url if present
       if (configSettingsTable.list) {
         configSettingsTable.list = configSettingsTable.list.filter((item: any) => {
           const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
-          return paramKey !== 'server_container_url';
+          return paramKey !== 'transport_url';
         });
 
-        // Add server_container_url to configSettingsTable
+        // Add transport_url to configSettingsTable
         configSettingsTable.list.push({
           type: 'map',
           map: [
-            { type: 'template', key: 'parameter', value: 'server_container_url' },
+            { type: 'template', key: 'parameter', value: 'transport_url' },
             { type: 'template', key: 'parameterValue', value: request.serverContainerUrl }
           ]
         });
@@ -197,7 +197,7 @@ export async function deployMigrationWithExportImport(
 
       modifiedCount++;
     } else if (category === 'ga4' && tag.type === 'gaawe') {
-      // For GA4 Event (gaawe), add server_container_url to the Event Parameters table
+      // For GA4 Event (gaawe), add transport_url to the Event Parameters table
       // Key: 'eventSettingsTable' (NOT 'eventParameters')
       // Map keys: 'parameter'/'parameterValue' (NOT 'name'/'value')
       // This is the correct structure that GTM UI expects
@@ -214,19 +214,19 @@ export async function deployMigrationWithExportImport(
         parameters.push(eventSettingsTable);
       }
 
-      // Remove existing server_container_url if present
+      // Remove existing transport_url if present
       if (eventSettingsTable.list) {
         eventSettingsTable.list = eventSettingsTable.list.filter((item: any) => {
           const paramKey = item.map?.find((m: any) => m.key === 'parameter')?.value;
-          return paramKey !== 'server_container_url';
+          return paramKey !== 'transport_url';
         });
 
-        // Add server_container_url as event parameter
+        // Add transport_url as event parameter
         // Structure: list of maps with 'parameter' and 'parameterValue' keys
         eventSettingsTable.list.push({
           type: 'map',
           map: [
-            { type: 'template', key: 'parameter', value: 'server_container_url' },
+            { type: 'template', key: 'parameter', value: 'transport_url' },
             { type: 'template', key: 'parameterValue', value: request.serverContainerUrl }
           ]
         });
@@ -236,16 +236,16 @@ export async function deployMigrationWithExportImport(
         tagName: tag.name,
         tagType: tag.type,
         parameterKey: 'eventSettingsTable'
-      }, 'Added server_container_url to GA4 Event tag');
+      }, 'Added transport_url to GA4 Event tag');
 
       modifiedCount++;
     } else if (category === 'ga4' && tag.type === 'gaawc') {
       // For GA4 Config (gaawc), add as direct parameters
       const filtered = parameters.filter((p: any) =>
-        p.key !== 'server_container_url' && p.key !== 'transportUrl'
+        p.key !== 'transport_url' && p.key !== 'transportUrl'
       );
       filtered.push(
-        { type: 'template', key: 'server_container_url', value: request.serverContainerUrl },
+        { type: 'template', key: 'transport_url', value: request.serverContainerUrl },
         { type: 'template', key: 'transportUrl', value: request.serverContainerUrl }
       );
       return {
@@ -255,8 +255,8 @@ export async function deployMigrationWithExportImport(
       };
     } else if (category === 'googads') {
       // For Google Ads tags, add as direct parameter
-      const filtered = parameters.filter((p: any) => p.key !== 'server_container_url');
-      filtered.push({ type: 'template', key: 'server_container_url', value: request.serverContainerUrl });
+      const filtered = parameters.filter((p: any) => p.key !== 'transport_url');
+      filtered.push({ type: 'template', key: 'transport_url', value: request.serverContainerUrl });
       return {
         ...tag,
         parameter: filtered,

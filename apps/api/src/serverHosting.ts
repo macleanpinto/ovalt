@@ -72,7 +72,7 @@ export function hostingGuideFor(provider: HostingProvider, ctx: { webContainerLa
           detail:
             "From Stape, copy your tagging server URL (custom domain or Stape subdomain). You will point " +
             label +
-            " tags at this URL (e.g. GA4 Google tag → server_container_url).",
+            " tags at this URL (e.g. GA4 Google tag → transport_url).",
           action: {
             label: "Find server container URL",
             href: "https://stape.io/helpdesk/documentation/find-server-container-url"
@@ -114,7 +114,7 @@ export function hostingGuideFor(provider: HostingProvider, ctx: { webContainerLa
           id: "gtm-ids",
           title: "Copy container ID and tagging URL",
           detail:
-            "From Google Tag Manager (server container) and TAGGRS, copy the public container ID (GTM-…) and the URL clients will use as server_container_url."
+            "From Google Tag Manager (server container) and TAGGRS, copy the public container ID (GTM-…) and the URL clients will use as transport_url."
         },
         {
           id: "web-container",

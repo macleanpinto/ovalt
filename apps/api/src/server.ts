@@ -1403,13 +1403,13 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     clientContainerPath,
     clientWorkspacePath,
     serverContainerPath,
-    server_container_url
+    transport_url
   } = req.body as {
     approvedTagIds: string[];
     clientContainerPath: string;
     clientWorkspacePath: string;
     serverContainerPath: string;
-    server_container_url: string;
+    transport_url: string;
   };
 
   // Validate required fields
@@ -1429,8 +1429,8 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     return reply.code(400).send({ message: "serverContainerPath required" });
   }
 
-  if (!server_container_url || typeof server_container_url !== "string") {
-    return reply.code(400).send({ message: "server_container_url required (e.g. https://your-sgtm.example.com)" });
+  if (!transport_url || typeof transport_url !== "string") {
+    return reply.code(400).send({ message: "transport_url required (e.g. https://your-sgtm.example.com)" });
   }
 
   // Get the migration report
@@ -1489,7 +1489,7 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
         clientContainerPath,
         clientWorkspacePath,
         serverContainerPath,
-        serverContainerUrl: server_container_url,
+        serverContainerUrl: transport_url,
         approvedTagIds,
         tagsByType: tagsByCategory
       },
@@ -1510,7 +1510,7 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
             tagsModified: result.tagsModified,
             clientWorkspacePath: result.clientWorkspacePath,
             serverWorkspacePath: result.serverWorkspacePath,
-            serverContainerUrl: server_container_url
+            serverContainerUrl: transport_url
           }],
           ":timestamp": new Date().toISOString()
         }
