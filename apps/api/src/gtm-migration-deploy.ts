@@ -3,20 +3,26 @@
  *
  * This module handles the deployment of migrated tags:
  * 1. Fetch all tags/triggers/variables from client workspace
- * 2. Modify approved tags to add server_container_url parameter
- * 3. Update tags in-place in the original client workspace
+ * 2. Modify ONLY GA4 tags to add server_container_url parameter
+ * 3. Update GA4 tags in-place in the original client workspace
  * 4. Create new "Ovalt Migration Workspace" in server container
  * 5. Copy required variables to server workspace
  * 6. Create consolidated server tags (one per tag type)
  *
  * CLIENT CONTAINER:
- * - Modifies tags directly in the existing workspace
- * - Only approved tags are updated
- * - Adds server_container_url to eventSettingsTable
+ * - Modifies ONLY GA4 tags directly in the existing workspace
+ * - Google Ads tags are NOT modified (they work through GA4 server infrastructure)
+ * - Adds server_container_url to eventSettingsTable on GA4 tags
  *
  * SERVER CONTAINER:
  * - Creates new "Ovalt Migration Workspace"
  * - Creates consolidated tags (one per tag type: GA4, Google Ads, etc.)
+ * - Google Ads conversions automatically flow through GA4 server tags
+ *
+ * GOOGLE ADS BEHAVIOR:
+ * - Google Ads server-side conversions work EXCLUSIVELY through GA4 infrastructure
+ * - Client-side Google Ads tags should NOT be routed to server
+ * - Server-side Google Ads Conversion Tracking tag receives data from GA4 tags
  *
  * BLOCKING TRIGGERS:
  * - Single vendor (e.g., only GA4): No blocking triggers created - tag fires on all events
@@ -155,20 +161,30 @@ export async function deployMigrationWithExportImport(
   }, 'Fetched client workspace entities');
 
   // ================================================================
-  // STEP 2: Modify ALL approved tags to add server_container_url
+  // STEP 2: Modify ONLY GA4 tags to add server_container_url
   // ================================================================
-  log.info({ serverUrl: request.serverContainerUrl }, 'Modifying tags to add server routing');
+  // Note: Google Ads conversions work through GA4 infrastructure on server-side
+  // Google Ads tags should NOT be routed to server directly
+  log.info({ serverUrl: request.serverContainerUrl }, 'Modifying GA4 tags to add server routing');
 
   let modifiedCount = 0;
   const modifiedTags = originalTags.map((tag: any) => {
-    // Only modify approved tags
+    // Only modify approved GA4 tags
     if (!request.approvedTagIds.includes(tag.tagId)) {
+      return tag;
+    }
+
+    const category = getTagCategory(tag.type);
+
+    // Only modify GA4 tags - Google Ads tags work through GA4 on server-side
+    if (category !== 'ga4') {
+      log.info({ tagName: tag.name, tagType: tag.type, category }, 'Skipping non-GA4 tag (will use GA4 server infrastructure)');
       return tag;
     }
 
     const parameters = [...(tag.parameter || [])];
 
-    // For ALL tags: Add server_container_url to event settings/parameters
+    // For GA4 tags: Add server_container_url to event settings/parameters
     // Find or create the eventSettingsTable list
     let eventSettingsTable = parameters.find((p: any) => p.key === 'eventSettingsTable');
 
@@ -207,17 +223,25 @@ export async function deployMigrationWithExportImport(
     };
   });
 
-  log.info({ modifiedCount }, 'Modified tags with server routing');
+  log.info({ modifiedCount }, 'Modified GA4 tags with server routing');
 
   // ================================================================
-  // STEP 3: Update existing tags in the original workspace
+  // STEP 3: Update existing GA4 tags in the original workspace
   // ================================================================
-  log.info({ workspace: request.clientWorkspacePath }, 'Updating tags in original workspace');
+  log.info({ workspace: request.clientWorkspacePath }, 'Updating GA4 tags in original workspace');
 
   let updatedCount = 0;
   for (const tag of modifiedTags) {
-    // Only update approved tags that were actually modified
+    // Only update approved GA4 tags that were actually modified
     if (!request.approvedTagIds.includes(tag.tagId)) {
+      continue;
+    }
+
+    const category = getTagCategory(tag.type);
+
+    // Only update GA4 tags
+    if (category !== 'ga4') {
+      log.info({ tagName: tag.name, tagType: tag.type }, 'Skipping non-GA4 tag update');
       continue;
     }
 
@@ -241,14 +265,14 @@ export async function deployMigrationWithExportImport(
         })
       );
       updatedCount++;
-      log.info({ tagName: tag.name, tagType: tag.type }, 'Updated tag with server routing');
+      log.info({ tagName: tag.name, tagType: tag.type }, 'Updated GA4 tag with server routing');
       await delay(2500);
     } catch (err: any) {
       log.warn({ tagName: tag.name, err: err.message }, 'Failed to update tag, skipping');
     }
   }
 
-  log.info({ updatedCount }, 'Updated tags in original workspace');
+  log.info({ updatedCount }, 'Updated GA4 tags in original workspace');
 
   // ================================================================
   // STEP 4: Create consolidated server tags
