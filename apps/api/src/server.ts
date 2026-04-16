@@ -1519,6 +1519,9 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
 
     return {
       success: true,
+      deployed: result.tagsModified,  // Number of client tags modified
+      failed: 0,  // No failures if we got here
+      workspacePath: result.serverWorkspacePath,  // For UI display
       clientWorkspace: {
         path: result.clientWorkspacePath,
         name: result.clientWorkspaceName,
@@ -1547,7 +1550,12 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
   } catch (err) {
     app.log.error({ err }, 'Deployment failed');
     const message = err instanceof Error ? err.message : 'Deployment failed';
-    return reply.code(502).send({ message });
+    return reply.code(502).send({
+      message,
+      deployed: 0,
+      failed: approvedTags.length,
+      errors: [{ error: message }]
+    });
   }
 });
 
