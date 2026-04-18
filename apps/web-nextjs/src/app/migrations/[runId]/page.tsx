@@ -413,12 +413,23 @@ export default function MigrationWorkspace() {
     return () => window.removeEventListener('tagrelay:gtm-session-lost', onLost);
   }, []);
 
+  // Track polling state to avoid duplicate logs
+  const pollingStateRef = useRef({
+    isInitialLoad: true,
+    previousStatus: '',
+    previousDeploymentStatus: ''
+  });
+
   useEffect(() => {
+    // Reset polling state when runId changes
+    pollingStateRef.current = {
+      isInitialLoad: true,
+      previousStatus: '',
+      previousDeploymentStatus: ''
+    };
+
     let isCancelled = false;
     let pollInterval: NodeJS.Timeout | null = null;
-    let isInitialLoad = true;
-    let previousStatus = '';
-    let previousDeploymentStatus = '';
 
     const loadRunData = async () => {
       if (!runId || isCancelled) return;
@@ -431,16 +442,16 @@ export default function MigrationWorkspace() {
         setRun(runData);
 
         // Only log on initial load or status changes
-        if (isInitialLoad) {
+        if (pollingStateRef.current.isInitialLoad) {
           addLog(`Connected to migration ${runId.slice(0, 8)}...`);
           addLog(`Status: ${runData.status.toUpperCase()}`);
-        } else if (previousStatus !== runData.status) {
+        } else if (pollingStateRef.current.previousStatus !== runData.status) {
           addLog(`Status changed: ${runData.status.toUpperCase()}`);
         }
-        previousStatus = runData.status;
+        pollingStateRef.current.previousStatus = runData.status;
 
         // Load client container info from import (only on initial load)
-        if (isInitialLoad && runData.importId) {
+        if (pollingStateRef.current.isInitialLoad && runData.importId) {
           try {
             const importData = await apiClient.getImport(runData.importId);
             if (isCancelled) return;
@@ -456,7 +467,7 @@ export default function MigrationWorkspace() {
         }
 
         // Load previously deployed tags from deployment history (only on initial load)
-        if (isInitialLoad && runData.deploymentHistory && runData.deploymentHistory.length > 0) {
+        if (pollingStateRef.current.isInitialLoad && runData.deploymentHistory && runData.deploymentHistory.length > 0) {
           const allDeployedTagIds = new Set<string>();
           runData.deploymentHistory.forEach(deployment => {
             deployment.deployedTagIds?.forEach(tagId => allDeployedTagIds.add(tagId));
@@ -477,12 +488,12 @@ export default function MigrationWorkspace() {
             setReport(reportData);
 
             // Only log on initial load
-            if (isInitialLoad) {
+            if (pollingStateRef.current.isInitialLoad) {
               addLog(`Migration report loaded: ${reportData.detectedTags?.length || 0} tags detected`);
             }
 
             // Expand all tag groups by default (only on initial load)
-            if (isInitialLoad && reportData.mappings && reportData.mappings.length > 0) {
+            if (pollingStateRef.current.isInitialLoad && reportData.mappings && reportData.mappings.length > 0) {
               const allClientTypes = new Set<string>(
                 reportData.mappings.map((m: MappingRecord) => m.clientTagType || 'unknown')
               );
@@ -490,7 +501,7 @@ export default function MigrationWorkspace() {
             }
 
             // Select first tag by default (only on initial load)
-            if (isInitialLoad && reportData.detectedTags && reportData.detectedTags.length > 0) {
+            if (pollingStateRef.current.isInitialLoad && reportData.detectedTags && reportData.detectedTags.length > 0) {
               const firstTag = reportData.detectedTags[0];
               setSelectedElement({
                 id: firstTag.id,
@@ -508,18 +519,18 @@ export default function MigrationWorkspace() {
               }
             }
           } catch (err: any) {
-            if (isInitialLoad) {
+            if (pollingStateRef.current.isInitialLoad) {
               addLog('Report not available yet');
             }
           }
-        } else if (isInitialLoad) {
+        } else if (pollingStateRef.current.isInitialLoad) {
           addLog(`Migration is ${runData.status}. Report will be available when completed.`);
         }
 
         // Handle deployment status updates - only log when status changes
         const currentDeploymentStatus = (runData as any).deploymentStatus || '';
-        if (currentDeploymentStatus && currentDeploymentStatus !== previousDeploymentStatus) {
-          if (currentDeploymentStatus === 'completed' && previousDeploymentStatus === 'deploying') {
+        if (currentDeploymentStatus && currentDeploymentStatus !== pollingStateRef.current.previousDeploymentStatus) {
+          if (currentDeploymentStatus === 'completed' && pollingStateRef.current.previousDeploymentStatus === 'deploying') {
             addLog('✅ Deployment completed successfully');
             if ((runData as any).deploymentHistory && (runData as any).deploymentHistory.length > 0) {
               const lastDep = (runData as any).deploymentHistory[(runData as any).deploymentHistory.length - 1];
@@ -537,16 +548,16 @@ export default function MigrationWorkspace() {
               }
             }
             setIsDeploying(false);
-          } else if (currentDeploymentStatus === 'failed' && previousDeploymentStatus === 'deploying') {
+          } else if (currentDeploymentStatus === 'failed' && pollingStateRef.current.previousDeploymentStatus === 'deploying') {
             const errorMsg = (runData as any).deploymentError || 'Unknown error';
             addLog(`❌ Deployment failed: ${errorMsg}`);
             setIsDeploying(false);
-          } else if (currentDeploymentStatus === 'deploying' && previousDeploymentStatus !== 'deploying') {
+          } else if (currentDeploymentStatus === 'deploying' && pollingStateRef.current.previousDeploymentStatus !== 'deploying') {
             addLog('⏳ Deployment in progress...');
             setIsDeploying(true);
           }
         }
-        previousDeploymentStatus = currentDeploymentStatus;
+        pollingStateRef.current.previousDeploymentStatus = currentDeploymentStatus;
 
         // Stop polling once migration is complete AND not deploying
         // Check deploymentStatus from API (not isDeploying state) to avoid closure bug
@@ -559,12 +570,12 @@ export default function MigrationWorkspace() {
         }
       } catch (err: any) {
         setError(err.message || 'Failed to load migration');
-        if (isInitialLoad) {
+        if (pollingStateRef.current.isInitialLoad) {
           addLog(`ERROR: ${err.message || 'Failed to load migration'}`);
         }
       } finally {
         setIsLoading(false);
-        isInitialLoad = false;
+        pollingStateRef.current.isInitialLoad = false;
       }
     };
 
