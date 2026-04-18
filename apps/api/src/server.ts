@@ -270,6 +270,7 @@ registerAuthRoutes(app, authService);
 registerOAuthRoutes(app, authService, oauthService);
 
 type GtmSession = {
+  sessionId: string;
   tokens: {
     access_token?: string | null;
     refresh_token?: string | null;
@@ -279,10 +280,36 @@ type GtmSession = {
     id_token?: string | null;
   };
   createdAt: number;
+  expiresAt: number;
   returnUrl?: string;
+  type: 'gtm';
 };
 
-const gtmSessions = new Map<string, GtmSession>();
+// GTM session helpers using DynamoDB
+async function getGtmSession(sessionId: string): Promise<GtmSession | null> {
+  try {
+    const result = await ddbDoc.send(
+      new GetCommand({
+        TableName: env.DDB_TABLE_SESSIONS,
+        Key: { sessionId }
+      })
+    );
+    if (!result.Item || result.Item.type !== 'gtm') return null;
+    return result.Item as GtmSession;
+  } catch (err) {
+    console.error('Failed to get GTM session:', err);
+    return null;
+  }
+}
+
+async function setGtmSession(session: GtmSession): Promise<void> {
+  await ddbDoc.send(
+    new PutCommand({
+      TableName: env.DDB_TABLE_SESSIONS,
+      Item: session
+    })
+  );
+}
 
 /**
  * GTM + list GCP projects + deploy tagging server to Cloud Run in the user's project (cloud-platform).
@@ -316,8 +343,8 @@ function getGtmSessionId(req: any) {
   return raw;
 }
 
-function getOAuthClientForSession(sessionId: string) {
-  const session = gtmSessions.get(sessionId);
+async function getOAuthClientForSession(sessionId: string) {
+  const session = await getGtmSession(sessionId);
   if (!session) return null;
 
   const clientId = (env.GTM_OAUTH_CLIENT_ID ?? env.GOOGLE_OAUTH_CLIENT_ID)!;
@@ -406,7 +433,15 @@ app.get("/gtm/oauth/start", async (req, reply) => {
     state: sessionId
   });
   // Create placeholder so callback can verify state exists.
-  gtmSessions.set(sessionId, { tokens: {}, createdAt: Date.now(), returnUrl });
+  const now = Date.now();
+  await setGtmSession({
+    sessionId,
+    tokens: {},
+    createdAt: now,
+    expiresAt: Math.floor((now + 30 * 24 * 60 * 60 * 1000) / 1000), // 30 days in seconds
+    returnUrl,
+    type: 'gtm'
+  });
   return {
     sessionId,
     url,
@@ -425,7 +460,7 @@ app.get("/gtm/oauth/callback", async (req, reply) => {
   if (!code || !state || typeof state !== "string") {
     return reply.code(400).send({ message: "Missing code/state" });
   }
-  const existingSession = gtmSessions.get(state);
+  const existingSession = await getGtmSession(state);
   if (!existingSession) {
     return reply.code(400).send({ message: "Invalid state" });
   }
@@ -434,7 +469,15 @@ app.get("/gtm/oauth/callback", async (req, reply) => {
   const clientSecret = (env.GTM_OAUTH_CLIENT_SECRET ?? env.GOOGLE_OAUTH_CLIENT_SECRET)!;
   const oauth2 = new google.auth.OAuth2(clientId, clientSecret, gtmOAuthRedirectUri!);
   const { tokens } = await oauth2.getToken(String(code));
-  gtmSessions.set(state, { tokens, createdAt: Date.now(), returnUrl: existingSession.returnUrl });
+  const now = Date.now();
+  await setGtmSession({
+    sessionId: state,
+    tokens,
+    createdAt: now,
+    expiresAt: Math.floor((now + 30 * 24 * 60 * 60 * 1000) / 1000), // 30 days in seconds
+    returnUrl: existingSession.returnUrl,
+    type: 'gtm'
+  });
 
   // Redirect to stored returnUrl or default to import/select
   const redirectPath = existingSession.returnUrl || `/import/select`;
@@ -458,15 +501,19 @@ if (env.NODE_ENV === 'development' || env.NODE_ENV === 'test') {
     }
 
     const sessionId = 'test-session-' + Date.now();
+    const now = Date.now();
 
-    gtmSessions.set(sessionId, {
+    await setGtmSession({
+      sessionId,
       tokens: {
         access_token: accessToken,
         refresh_token: refreshToken,
         expiry_date: expiryDate
       },
-      createdAt: Date.now(),
-      returnUrl: '/'
+      createdAt: now,
+      expiresAt: Math.floor((now + 30 * 24 * 60 * 60 * 1000) / 1000), // 30 days in seconds
+      returnUrl: '/',
+      type: 'gtm'
     });
 
     app.log.info({ sessionId }, "Created test GTM session");
@@ -512,7 +559,7 @@ app.get("/gtm/accounts", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const tm = google.tagmanager({ version: "v2", auth });
@@ -524,7 +571,7 @@ app.get("/gtm/containers", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const { accountPath } = (req.query as any) ?? {};
@@ -539,7 +586,7 @@ app.get("/gtm/cloud-projects", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   try {
@@ -571,7 +618,7 @@ app.post("/gtm/create-server-container", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const parsed = createServerContainerSchema.safeParse(req.body ?? {});
@@ -650,7 +697,7 @@ app.post("/gtm/deploy-tagging-server", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const parsed = deployTaggingServerSchema.safeParse(req.body ?? {});
@@ -732,7 +779,7 @@ app.post("/gtm/import-container", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const parsed = gtmImportSchema.safeParse(req.body ?? {});
@@ -1313,7 +1360,7 @@ app.get("/gtm/debug/tags", async (req, reply) => {
     return reply.code(400).send({ message: "gtmSession and workspacePath required" });
   }
 
-  const session = gtmSessions.get(gtmSession);
+  const session = await getGtmSession(gtmSession);
   if (!session?.tokens?.access_token) {
     return reply.code(401).send({ message: "Invalid or expired GTM session" });
   }
@@ -1394,7 +1441,7 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const runId = (req.params as { runId: string }).runId;
@@ -1580,7 +1627,7 @@ app.post("/migrations/:runId/deploy-variables", async (req, reply) => {
   if (!requireGtmOAuthConfigured(reply)) return;
   const sessionId = getGtmSessionId(req);
   if (!sessionId) return reply.code(401).send({ message: "Missing x-gtm-session" });
-  const auth = getOAuthClientForSession(sessionId);
+  const auth = await getOAuthClientForSession(sessionId);
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const runId = (req.params as { runId: string }).runId;
