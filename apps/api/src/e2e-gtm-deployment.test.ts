@@ -545,14 +545,69 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
       return;
     }
 
-    if (deployResponse.statusCode !== 200) {
-      console.log(`   ❌ Deployment failed with status ${deployResponse.statusCode}`);
-      console.log(`   Error: ${JSON.stringify(deployResponse.json(), null, 2)}\n`);
-      return;
+    // Deployment is now async - expect 202 Accepted
+    expect(deployResponse.statusCode).toBe(202);
+    const deployAck = deployResponse.json();
+    console.log(`   ✅ Deployment started: ${deployAck.status}`);
+    console.log(`   ⏳ Waiting for deployment to complete...\n`);
+
+    // Poll for deployment completion (max 2 minutes)
+    let deploymentStatus: string | undefined;
+    let deployResult: any = null;
+    const deployMaxAttempts = 120; // 2 minutes
+    const deployPollInterval = 1000; // 1 second
+
+    for (let attempt = 1; attempt <= deployMaxAttempts; attempt++) {
+      const statusResponse = await app.inject({
+        method: 'GET',
+        url: `/migrations/${runId}`,
+        headers: { authorization: `Bearer ${authToken}` },
+      });
+
+      const runStatus = statusResponse.json();
+      deploymentStatus = runStatus.deploymentStatus;
+
+      if (deploymentStatus === 'completed') {
+        console.log(`   ✅ Deployment completed after ${attempt} seconds`);
+
+        // Extract deployment result from deploymentHistory
+        if (runStatus.deploymentHistory && runStatus.deploymentHistory.length > 0) {
+          const lastDeployment = runStatus.deploymentHistory[runStatus.deploymentHistory.length - 1];
+          deployResult = {
+            success: lastDeployment.success,
+            deployed: lastDeployment.deployed,
+            clientWorkspace: {
+              name: lastDeployment.clientWorkspaceName,
+              path: lastDeployment.clientWorkspacePath,
+              tagsModified: lastDeployment.tagsModified
+            },
+            serverWorkspace: {
+              name: lastDeployment.serverWorkspaceName,
+              path: lastDeployment.serverWorkspacePath,
+              tags: lastDeployment.serverTags || []
+            }
+          };
+        }
+        break;
+      }
+
+      if (deploymentStatus === 'failed') {
+        console.log(`   ❌ Deployment failed: ${runStatus.deploymentError}`);
+        throw new Error(`Deployment failed: ${runStatus.deploymentError}`);
+      }
+
+      if (attempt === deployMaxAttempts) {
+        console.log(`   ⏱️  Deployment still ${deploymentStatus || 'deploying'} after ${deployMaxAttempts} seconds`);
+        throw new Error('Deployment timed out');
+      }
+
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, deployPollInterval));
     }
 
-    expect(deployResponse.statusCode).toBe(200);
-    const deployResult = deployResponse.json();
+    if (!deployResult) {
+      throw new Error('Deployment completed but no result found in deploymentHistory');
+    }
 
     console.log(`   ✅ Deployment successful!\n`);
 
@@ -684,5 +739,5 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
     console.log('      - Verify consolidated tags (one per tag type)');
     console.log('   3. Test both workspaces in Preview mode');
     console.log('   4. Publish when ready\n');
-  }, 120000); // 2 minute timeout for full deployment
+  }, 240000); // 4 minute timeout for full deployment (includes async deployment wait)
 });
