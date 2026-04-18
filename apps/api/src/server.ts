@@ -1528,86 +1528,103 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
   app.log.info({
     approvedCount: approvedTags.length,
     categories: Array.from(tagsByCategory.keys())
-  }, 'Deploying migration');
+  }, 'Starting async deployment');
 
-  try {
-    const { deployMigrationWithExportImport } = await import('./gtm-migration-deploy.js');
+  // Mark deployment as in-progress
+  await ddbDoc.send(
+    new UpdateCommand({
+      TableName: env.DDB_TABLE_RUNS,
+      Key: { runId },
+      UpdateExpression: "SET deploymentStatus = :status, deploymentStartedAt = :timestamp",
+      ExpressionAttributeValues: {
+        ":status": "deploying",
+        ":timestamp": new Date().toISOString()
+      }
+    })
+  );
 
-    const result = await deployMigrationWithExportImport(
-      auth,
-      {
-        clientContainerPath,
-        clientWorkspacePath,
-        serverContainerPath,
-        serverContainerUrl: transport_url,
-        approvedTagIds,
-        tagsByType: tagsByCategory,
-        metaAccessToken
-      },
-      app.log
-    );
+  // Return 202 Accepted immediately - deployment continues in background
+  reply.code(202).send({
+    message: "Deployment started",
+    status: "deploying",
+    runId,
+    approvedTagIds
+  });
 
-    // Save deployment record to DynamoDB
-    await ddbDoc.send(
-      new UpdateCommand({
-        TableName: env.DDB_TABLE_RUNS,
-        Key: { runId },
-        UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp",
-        ExpressionAttributeValues: {
-          ":empty": [],
-          ":deployment": [{
-            timestamp: new Date().toISOString(),
-            deployed: result.serverTagsCreated.length,
-            tagsModified: result.tagsModified,
-            clientWorkspacePath: result.clientWorkspacePath,
-            serverWorkspacePath: result.serverWorkspacePath,
-            serverContainerUrl: transport_url
-          }],
-          ":timestamp": new Date().toISOString()
-        }
-      })
-    );
+  // Process deployment asynchronously after response is sent
+  setImmediate(async () => {
+    try {
+      const { deployMigrationWithExportImport } = await import('./gtm-migration-deploy.js');
 
-    return {
-      success: true,
-      deployed: result.tagsModified,  // Number of client tags modified
-      failed: 0,  // No failures if we got here
-      workspacePath: result.serverWorkspacePath,  // For UI display
-      clientWorkspace: {
-        path: result.clientWorkspacePath,
-        name: result.clientWorkspaceName,
-        tagsModified: result.tagsModified
-      },
-      serverWorkspace: {
-        path: result.serverWorkspacePath,
-        name: result.serverWorkspaceName,
-        tags: result.serverTagsCreated
-      },
-      nextSteps: [
-        `✅ Client container: ${result.tagsModified} tags modified with server routing`,
-        `   → Workspace: "${result.clientWorkspaceName}"`,
-        `   → URL: https://tagmanager.google.com/#${result.clientWorkspacePath}`,
-        '',
-        `✅ Server container: ${result.serverTagsCreated.length} consolidated tags created`,
-        `   → Workspace: "${result.serverWorkspaceName}"`,
-        `   → URL: https://tagmanager.google.com/#${result.serverWorkspacePath}`,
-        '',
-        '📋 Next Steps:',
-        '1. Review both workspaces in GTM',
-        '2. Test in Preview mode',
-        '3. Publish when ready'
-      ]
-    };
-  } catch (err) {
-    app.log.error({ err }, 'Deployment failed');
-    const message = err instanceof Error ? err.message : 'Deployment failed';
-    return reply.code(502).send({
-      message,
-      deployed: 0,
-      failed: approvedTags.length,
-      errors: [{ error: message }]
-    });
-  }
+      const result = await deployMigrationWithExportImport(
+        auth,
+        {
+          clientContainerPath,
+          clientWorkspacePath,
+          serverContainerPath,
+          serverContainerUrl: transport_url,
+          approvedTagIds,
+          tagsByType: tagsByCategory,
+          metaAccessToken
+        },
+        app.log
+      );
+
+      // Save successful deployment to DynamoDB
+      await ddbDoc.send(
+        new UpdateCommand({
+          TableName: env.DDB_TABLE_RUNS,
+          Key: { runId },
+          UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp, deploymentStatus = :status, deploymentCompletedAt = :completed",
+          ExpressionAttributeValues: {
+            ":empty": [],
+            ":deployment": [{
+              timestamp: new Date().toISOString(),
+              deployed: result.serverTagsCreated.length,
+              tagsModified: result.tagsModified,
+              clientWorkspacePath: result.clientWorkspacePath,
+              clientWorkspaceName: result.clientWorkspaceName,
+              serverWorkspacePath: result.serverWorkspacePath,
+              serverWorkspaceName: result.serverWorkspaceName,
+              serverContainerUrl: transport_url,
+              serverTags: result.serverTagsCreated,
+              success: true
+            }],
+            ":timestamp": new Date().toISOString(),
+            ":status": "completed",
+            ":completed": new Date().toISOString()
+          }
+        })
+      );
+
+      app.log.info({ runId, deployed: result.tagsModified }, 'Deployment completed successfully');
+    } catch (err) {
+      app.log.error({ err, runId }, 'Async deployment failed');
+      const message = err instanceof Error ? err.message : 'Deployment failed';
+
+      // Save failed deployment to DynamoDB
+      await ddbDoc.send(
+        new UpdateCommand({
+          TableName: env.DDB_TABLE_RUNS,
+          Key: { runId },
+          UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), deploymentStatus = :status, deploymentCompletedAt = :completed, deploymentError = :error",
+          ExpressionAttributeValues: {
+            ":empty": [],
+            ":deployment": [{
+              timestamp: new Date().toISOString(),
+              deployed: 0,
+              failed: approvedTags.length,
+              error: message,
+              success: false
+            }],
+            ":status": "failed",
+            ":completed": new Date().toISOString(),
+            ":error": message
+          }
+        })
+      );
+    }
+  });
 });
 
 // Keep old endpoint for backwards compatibility

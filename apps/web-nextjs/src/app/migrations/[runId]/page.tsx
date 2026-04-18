@@ -501,8 +501,39 @@ export default function MigrationWorkspace() {
           addLog(`Migration is ${runData.status}. Report will be available when completed.`);
         }
 
-        // Stop polling once migration is complete
-        if (runData.status !== 'queued' && runData.status !== 'running') {
+        // Handle deployment status updates
+        if ((runData as any).deploymentStatus) {
+          const depStatus = (runData as any).deploymentStatus;
+          if (depStatus === 'completed' && isDeploying) {
+            addLog('✅ Deployment completed successfully');
+            if ((runData as any).deploymentHistory && (runData as any).deploymentHistory.length > 0) {
+              const lastDep = (runData as any).deploymentHistory[(runData as any).deploymentHistory.length - 1];
+              if (lastDep.tagsModified) {
+                addLog(`✅ ${lastDep.tagsModified} tags modified in client workspace`);
+              }
+              if (lastDep.deployed) {
+                addLog(`✅ ${lastDep.deployed} server-side tags created`);
+              }
+              if (lastDep.clientWorkspacePath) {
+                addLog(`📦 Client workspace: ${lastDep.clientWorkspaceName || 'Migration Workspace'}`);
+              }
+              if (lastDep.serverWorkspacePath) {
+                addLog(`📦 Server workspace: ${lastDep.serverWorkspaceName || 'Migration Workspace'}`);
+              }
+            }
+            setIsDeploying(false);
+          } else if (depStatus === 'failed' && isDeploying) {
+            const errorMsg = (runData as any).deploymentError || 'Unknown error';
+            addLog(`❌ Deployment failed: ${errorMsg}`);
+            setIsDeploying(false);
+          } else if (depStatus === 'deploying' && !isDeploying) {
+            addLog('⏳ Deployment in progress...');
+            setIsDeploying(true);
+          }
+        }
+
+        // Stop polling once migration is complete and not deploying
+        if (runData.status !== 'queued' && runData.status !== 'running' && !isDeploying) {
           if (pollInterval) {
             clearInterval(pollInterval);
             pollInterval = null;
@@ -1704,7 +1735,7 @@ export default function MigrationWorkspace() {
                             'No GTM session saved. Click "Reconnect GTM" in this dialog, then deploy again.'
                           );
                         }
-                        addLog('⏳ Sending deploy request to API (this may take a minute)...');
+                        addLog('⏳ Sending deploy request to API...');
                         if (metaAccessToken) {
                           addLog('🔑 Using provided Meta Access Token');
                         }
@@ -1718,7 +1749,20 @@ export default function MigrationWorkspace() {
                           gtmSessionId,
                           metaAccessToken || undefined
                         );
-                        processDeploymentResult(result);
+
+                        // Check if deployment is async (202) or sync (200)
+                        if (result.status === 'deploying') {
+                          addLog('✅ Deployment started successfully');
+                          addLog('⏳ Processing in background (this may take 1-2 minutes)...');
+                          addLog('📊 Poll status will update automatically');
+                          // Keep isDeploying true so UI shows deployment in progress
+                          // Polling will pick up deploymentStatus and update UI
+                        } else {
+                          // Legacy sync response (200) - process immediately
+                          processDeploymentResult(result);
+                          setIsDeploying(false);
+                        }
+
                         try {
                           const refreshed = await apiClient.getRun(runId);
                           setRun(refreshed);
@@ -1729,7 +1773,6 @@ export default function MigrationWorkspace() {
                         if (isGtmSessionApiError(error)) setNeedsGtmReconnect(true);
                         addLog(`❌ Deployment failed: ${error.message}`);
                         alert.error(`Deployment failed: ${error.message}`);
-                      } finally {
                         setIsDeploying(false);
                       }
                     }}
