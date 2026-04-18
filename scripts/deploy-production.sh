@@ -58,12 +58,24 @@ cd apps/worker && npm run build:lambda && cd ../..
 echo "✅ Lambda functions bundled"
 
 echo "Checking for existing API deployment..."
+# Try to get custom domain URL first (production), fall back to regular API URL
+EXISTING_CUSTOM_URL=$(aws cloudformation describe-stacks \
+  --stack-name tag-relay-api-$ENVIRONMENT \
+  --region $AWS_REGION \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiCustomDomainUrl`].OutputValue' \
+  --output text 2>/dev/null || echo "")
+
 EXISTING_API_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-api-$ENVIRONMENT \
+  --region $AWS_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
   --output text 2>/dev/null || echo "")
 
-if [ -n "$EXISTING_API_URL" ]; then
+# Prefer custom domain URL if available
+if [ -n "$EXISTING_CUSTOM_URL" ]; then
+  NEXT_PUBLIC_API_URL=$EXISTING_CUSTOM_URL
+  echo "✅ Found existing custom domain URL: $NEXT_PUBLIC_API_URL"
+elif [ -n "$EXISTING_API_URL" ]; then
   NEXT_PUBLIC_API_URL=$EXISTING_API_URL
   echo "✅ Found existing API URL: $NEXT_PUBLIC_API_URL"
 else
@@ -105,15 +117,41 @@ echo "==========================================="
 echo "Fetching stack outputs..."
 echo ""
 
+# Get API URL - prefer custom domain if available
+API_CUSTOM_URL=$(aws cloudformation describe-stacks \
+  --stack-name tag-relay-api-$ENVIRONMENT \
+  --region $AWS_REGION \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiCustomDomainUrl`].OutputValue' \
+  --output text 2>/dev/null || echo "")
+
 API_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-api-$ENVIRONMENT \
+  --region $AWS_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
   --output text 2>/dev/null || echo "Not deployed yet")
 
+# Use custom domain if available
+if [ -n "$API_CUSTOM_URL" ]; then
+  API_URL=$API_CUSTOM_URL
+fi
+
+# Get Web URL - prefer custom domain if available (CloudFront)
+WEB_CUSTOM_URL=$(aws cloudformation describe-stacks \
+  --stack-name tag-relay-domain-$ENVIRONMENT \
+  --region us-east-1 \
+  --query 'Stacks[0].Outputs[?OutputKey==`WebDomainName`].OutputValue' \
+  --output text 2>/dev/null || echo "")
+
 WEB_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-web-$ENVIRONMENT \
+  --region $AWS_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`WebUrl`].OutputValue' \
   --output text 2>/dev/null || echo "Not deployed yet")
+
+# Use custom domain if available
+if [ -n "$WEB_CUSTOM_URL" ]; then
+  WEB_URL=$WEB_CUSTOM_URL
+fi
 
 echo "=========================================="
 echo "Your Application URLs"
