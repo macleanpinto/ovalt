@@ -435,7 +435,10 @@ export default function MigrationWorkspace() {
       if (!runId || isCancelled) return;
 
       try {
-        setIsLoading(true);
+        // Only show loading spinner on initial load, not on subsequent polls
+        if (pollingStateRef.current.isInitialLoad) {
+          setIsLoading(true);
+        }
         const runData = await apiClient.getRun(runId);
         if (isCancelled) return;
 
