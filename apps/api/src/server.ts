@@ -1253,6 +1253,7 @@ app.post("/migrations/:importId/run", async (req, reply) => {
     new SendMessageCommand({
       QueueUrl: env.SQS_QUEUE_URL,
       MessageBody: JSON.stringify({
+        type: "migration",
         runId,
         importId,
         projectId: foundImport.Item.projectId,
@@ -1543,88 +1544,35 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     })
   );
 
-  // Return 202 Accepted immediately - deployment continues in background
-  reply.code(202).send({
-    message: "Deployment started",
-    status: "deploying",
-    runId,
-    approvedTagIds
-  });
-
-  // Process deployment asynchronously after response is sent
-  setImmediate(async () => {
-    try {
-      const { deployMigrationWithExportImport } = await import('./gtm-migration-deploy.js');
-
-      const result = await deployMigrationWithExportImport(
-        auth,
-        {
+  // Queue deployment to SQS for processing by worker Lambda
+  await sqs.send(
+    new SendMessageCommand({
+      QueueUrl: env.SQS_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        type: "deployment",
+        runId,
+        deploymentConfig: {
           clientContainerPath,
           clientWorkspacePath,
           serverContainerPath,
           serverContainerUrl: transport_url,
           approvedTagIds,
-          tagsByType: tagsByCategory,
+          tagsByType: Object.fromEntries(tagsByCategory),
           metaAccessToken
         },
-        app.log
-      );
+        gtmSessionId: sessionId
+      })
+    })
+  );
 
-      // Save successful deployment to DynamoDB
-      await ddbDoc.send(
-        new UpdateCommand({
-          TableName: env.DDB_TABLE_RUNS,
-          Key: { runId },
-          UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp, deploymentStatus = :status, deploymentCompletedAt = :completed",
-          ExpressionAttributeValues: {
-            ":empty": [],
-            ":deployment": [{
-              timestamp: new Date().toISOString(),
-              deployed: result.serverTagsCreated.length,
-              tagsModified: result.tagsModified,
-              clientWorkspacePath: result.clientWorkspacePath,
-              clientWorkspaceName: result.clientWorkspaceName,
-              serverWorkspacePath: result.serverWorkspacePath,
-              serverWorkspaceName: result.serverWorkspaceName,
-              serverContainerUrl: transport_url,
-              serverTags: result.serverTagsCreated,
-              success: true
-            }],
-            ":timestamp": new Date().toISOString(),
-            ":status": "completed",
-            ":completed": new Date().toISOString()
-          }
-        })
-      );
-
-      app.log.info({ runId, deployed: result.tagsModified }, 'Deployment completed successfully');
-    } catch (err) {
-      app.log.error({ err, runId }, 'Async deployment failed');
-      const message = err instanceof Error ? err.message : 'Deployment failed';
-
-      // Save failed deployment to DynamoDB
-      await ddbDoc.send(
-        new UpdateCommand({
-          TableName: env.DDB_TABLE_RUNS,
-          Key: { runId },
-          UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), deploymentStatus = :status, deploymentCompletedAt = :completed, deploymentError = :error",
-          ExpressionAttributeValues: {
-            ":empty": [],
-            ":deployment": [{
-              timestamp: new Date().toISOString(),
-              deployed: 0,
-              failed: approvedTags.length,
-              error: message,
-              success: false
-            }],
-            ":status": "failed",
-            ":completed": new Date().toISOString(),
-            ":error": message
-          }
-        })
-      );
-    }
+  // Return 202 Accepted immediately
+  return reply.code(202).send({
+    message: "Deployment queued",
+    status: "deploying",
+    runId,
+    approvedTagIds
   });
+
 });
 
 // Keep old endpoint for backwards compatibility

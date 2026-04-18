@@ -31,7 +31,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export async function processMessage(message: QueueMessage): Promise<void> {
   await ensureArtifactsBucket();
-  await processRun(message);
+
+  if (message.type === 'deployment') {
+    // Handle deployment message
+    const { processDeployment } = await import('./deployment-processor.js');
+    await processDeployment(message);
+  } else {
+    // Handle migration message (backwards compatible - old messages don't have type field)
+    await processRun(message);
+  }
 }
 
 /**

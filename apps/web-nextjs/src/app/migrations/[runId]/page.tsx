@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ProtectedRoute, useAuth } from '@/lib/auth-context';
@@ -129,6 +129,9 @@ export default function MigrationWorkspace() {
   /** Main workspace area: tag review vs deployment log / progress */
   const [workspaceTab, setWorkspaceTab] = useState<'review' | 'deployment'>('review');
   const deploymentLogRef = useRef<HTMLDivElement>(null);
+  /** After Deploy Now: scroll deployment log panel into view once the modal closes and tab switches. */
+  const pendingScrollToDeploymentPanelRef = useRef(false);
+  const deploymentPanelRef = useRef<HTMLDivElement>(null);
 
   // Meta Pixel Access Token state
   const [metaAccessToken, setMetaAccessToken] = useState('');
@@ -393,6 +396,22 @@ export default function MigrationWorkspace() {
     if (workspaceTab !== 'deployment' || !deploymentLogRef.current) return;
     deploymentLogRef.current.scrollTop = deploymentLogRef.current.scrollHeight;
   }, [logs, workspaceTab, isDeploying]);
+
+  /** Deploy Now: after closing the modal, bring the deployment log panel into view (mobile + desktop). */
+  useLayoutEffect(() => {
+    if (
+      !pendingScrollToDeploymentPanelRef.current ||
+      showDeploymentModal ||
+      workspaceTab !== 'deployment'
+    ) {
+      return;
+    }
+    pendingScrollToDeploymentPanelRef.current = false;
+    deploymentPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    requestAnimationFrame(() => {
+      deploymentLogRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  }, [workspaceTab, showDeploymentModal]);
 
   // Handle GTM session from OAuth callback
   useEffect(() => {
@@ -1015,10 +1034,17 @@ export default function MigrationWorkspace() {
           </button>
         </div>
 
-        <main className="flex bg-[#131313] overflow-hidden min-h-0 h-[calc(100dvh-8.5rem)] md:h-[calc(100dvh-7.5rem)]">
+        <main
+          className={`flex bg-[#131313] overflow-hidden min-h-0 h-[calc(100dvh-8.5rem)] md:h-[calc(100dvh-7.5rem)] ${
+            workspaceTab === 'deployment' ? 'pb-24 md:pb-20' : ''
+          }`}
+        >
           {workspaceTab === 'deployment' ? (
             <div className="flex-1 flex flex-col min-h-0 p-6 md:p-8 overflow-hidden">
-              <div className="max-w-4xl mx-auto w-full flex flex-col min-h-0 flex-1">
+              <div
+                ref={deploymentPanelRef}
+                className="max-w-4xl mx-auto w-full flex flex-col min-h-0 flex-1"
+              >
                 <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
                   <div>
                     <h2 className="text-2xl font-bold text-white tracking-tight">Deployment log</h2>
@@ -1763,9 +1789,11 @@ export default function MigrationWorkspace() {
                         alert.error('Client container info not available. Please re-import your container.');
                         return;
                       }
+                      // Close overlay first, then switch to deployment log (batched; layout effect scrolls log into view).
+                      pendingScrollToDeploymentPanelRef.current = true;
+                      setShowDeploymentModal(false);
                       setWorkspaceTab('deployment');
                       setIsDeploying(true);
-                      setShowDeploymentModal(false);
                       addLog(`🚀 Starting deployment of ${approvedTags.size} approved tag(s)...`);
                       addLog(`📦 Client container: ${clientContainerPath}`);
                       addLog(`📦 Server container: ${serverContainerPath}`);
