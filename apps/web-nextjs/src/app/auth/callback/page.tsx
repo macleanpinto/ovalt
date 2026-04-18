@@ -30,8 +30,8 @@ function OAuthCallbackInner() {
       // Store token
       apiClient.setToken(token);
 
-      // Force full page reload to dashboard to pick up the new token
-      window.location.href = "/dashboard";
+      // Navigate to dashboard
+      router.push("/dashboard");
     };
 
     handleCallback();

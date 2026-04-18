@@ -883,12 +883,12 @@ export default function MigrationWorkspace() {
                     >
                       Back to Migrations
                     </Link>
-                    <button
-                      onClick={() => window.location.reload()}
+                    <Link
+                      href="/import"
                       className="px-6 py-3 border border-outline-variant/30 text-white rounded-xl hover:bg-white/5 transition-colors"
                     >
-                      Retry
-                    </button>
+                      Start New Import
+                    </Link>
                   </div>
                 </div>
               </div>

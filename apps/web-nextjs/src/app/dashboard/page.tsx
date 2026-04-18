@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth, ProtectedRoute } from "@/lib/auth-context";
 import { apiClient, Import, Stats, Run } from "@/lib/api-client";
 import { useAlert } from "@/lib/alert-context";
 import AppHeader from "@/components/AppHeader";
 
 export default function Dashboard() {
+  const router = useRouter();
   const { organization, user } = useAuth();
   const alert = useAlert();
   const [stats, setStats] = useState<Stats | null>(null);
@@ -231,7 +233,7 @@ export default function Dashboard() {
                               console.log('Creating migration for import:', imp.importId);
                               const run = await apiClient.createRun(imp.importId);
                               console.log('Migration created:', run);
-                              window.location.href = `/migrations/${run.runId}`;
+                              router.push(`/migrations/${run.runId}`);
                             } catch (err: any) {
                               console.error('Failed to create migration:', err);
                               alert.error(`Failed to create migration: ${err.message}`);
