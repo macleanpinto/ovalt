@@ -414,12 +414,17 @@ export default function MigrationWorkspace() {
   }, []);
 
   useEffect(() => {
+    let isCancelled = false;
+    let pollInterval: NodeJS.Timeout | null = null;
+
     const loadRunData = async () => {
-      if (!runId) return;
+      if (!runId || isCancelled) return;
 
       try {
         setIsLoading(true);
         const runData = await apiClient.getRun(runId);
+        if (isCancelled) return;
+
         setRun(runData);
 
         addLog(`Connected to migration ${runId.slice(0, 8)}...`);
@@ -429,6 +434,8 @@ export default function MigrationWorkspace() {
         if (runData.importId) {
           try {
             const importData = await apiClient.getImport(runData.importId);
+            if (isCancelled) return;
+
             if (importData.gtm?.containerPath && importData.gtm?.workspacePath) {
               setClientContainerPath(importData.gtm.containerPath);
               setClientWorkspacePath(importData.gtm.workspacePath);
@@ -456,6 +463,8 @@ export default function MigrationWorkspace() {
         if (runData.status === 'completed' || runData.status === 'needs_review') {
           try {
             const reportData = await apiClient.getRunReport(runId);
+            if (isCancelled) return;
+
             setReport(reportData);
             addLog(`Migration report loaded: ${reportData.detectedTags?.length || 0} tags detected`);
 
@@ -491,6 +500,14 @@ export default function MigrationWorkspace() {
         } else {
           addLog(`Migration is ${runData.status}. Report will be available when completed.`);
         }
+
+        // Stop polling once migration is complete
+        if (runData.status !== 'queued' && runData.status !== 'running') {
+          if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+          }
+        }
       } catch (err: any) {
         setError(err.message || 'Failed to load migration');
         addLog(`ERROR: ${err.message || 'Failed to load migration'}`);
@@ -501,14 +518,17 @@ export default function MigrationWorkspace() {
 
     loadRunData();
 
-    // Poll for updates if running or queued
-    const interval = setInterval(() => {
-      if (run && (run.status === 'queued' || run.status === 'running')) {
-        loadRunData();
-      }
+    // Poll for updates every 5 seconds - always check fresh status from API
+    pollInterval = setInterval(() => {
+      loadRunData();
     }, 5000);
 
-    return () => clearInterval(interval);
+    return () => {
+      isCancelled = true;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
   }, [runId]);
 
   // Reset edit mode when selected element changes
