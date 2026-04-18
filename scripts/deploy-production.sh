@@ -6,18 +6,20 @@ set -e
 
 # Configuration
 AWS_PROFILE_ARG=${1:-${AWS_PROFILE:-tagrelay-prod}}
-AWS_REGION_ARG=${2:-${AWS_REGION:-eu-north-1}}
+APP_REGION=${2:-eu-north-1}  # App stacks (API, Web, Database) region
+DOMAIN_REGION="us-east-1"     # Domain stack (CloudFront) must be in us-east-1
 ENVIRONMENT="production"
 
 # Export for all commands
 export AWS_PROFILE=$AWS_PROFILE_ARG
-export AWS_REGION=$AWS_REGION_ARG
+export AWS_REGION=$APP_REGION  # Default region for CDK
 
 echo "==========================================="
 echo "Tag Relay Production Deployment"
 echo "==========================================="
 echo "AWS Profile: $AWS_PROFILE"
-echo "AWS Region: $AWS_REGION"
+echo "App Region: $APP_REGION (API, Web, Database)"
+echo "Domain Region: $DOMAIN_REGION (CloudFront, Certificate)"
 echo "Environment: $ENVIRONMENT"
 echo ""
 
@@ -29,13 +31,13 @@ echo ""
 
 # Check if CDK is bootstrapped
 echo "Checking CDK bootstrap status..."
-if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region $AWS_REGION &>/dev/null; then
-  echo "⚠️  CDK not bootstrapped in this account/region"
-  echo "Running: cdk bootstrap aws://$ACCOUNT_ID/$AWS_REGION"
+if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region $APP_REGION &>/dev/null; then
+  echo "⚠️  CDK not bootstrapped in $APP_REGION"
+  echo "Running: cdk bootstrap aws://$ACCOUNT_ID/$APP_REGION"
   cd infra/cdk
   npm ci
   npm run build
-  cdk bootstrap aws://$ACCOUNT_ID/$AWS_REGION
+  cdk bootstrap aws://$ACCOUNT_ID/$APP_REGION
   cd ../..
   echo "✅ CDK bootstrapped"
 else
@@ -61,13 +63,13 @@ echo "Checking for existing API deployment..."
 # Try to get custom domain URL first (production), fall back to regular API URL
 EXISTING_CUSTOM_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-api-$ENVIRONMENT \
-  --region $AWS_REGION \
+  --region $APP_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiCustomDomainUrl`].OutputValue' \
   --output text 2>/dev/null || echo "")
 
 EXISTING_API_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-api-$ENVIRONMENT \
-  --region $AWS_REGION \
+  --region $APP_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
   --output text 2>/dev/null || echo "")
 
@@ -120,13 +122,13 @@ echo ""
 # Get API URL - prefer custom domain if available
 API_CUSTOM_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-api-$ENVIRONMENT \
-  --region $AWS_REGION \
+  --region $APP_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiCustomDomainUrl`].OutputValue' \
   --output text 2>/dev/null || echo "")
 
 API_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-api-$ENVIRONMENT \
-  --region $AWS_REGION \
+  --region $APP_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
   --output text 2>/dev/null || echo "Not deployed yet")
 
@@ -138,13 +140,13 @@ fi
 # Get Web URL - prefer custom domain if available (CloudFront)
 WEB_CUSTOM_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-domain-$ENVIRONMENT \
-  --region us-east-1 \
+  --region $DOMAIN_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`WebDomainName`].OutputValue' \
   --output text 2>/dev/null || echo "")
 
 WEB_URL=$(aws cloudformation describe-stacks \
   --stack-name tag-relay-web-$ENVIRONMENT \
-  --region $AWS_REGION \
+  --region $APP_REGION \
   --query 'Stacks[0].Outputs[?OutputKey==`WebUrl`].OutputValue' \
   --output text 2>/dev/null || echo "Not deployed yet")
 
