@@ -1584,7 +1584,7 @@ export default function MigrationWorkspace() {
                             onChange={(e) => setMetaAccessToken(e.target.value)}
                           />
                           <p className="text-[10px] text-[#bacbbe]/80 mt-2">
-                            <span className="text-yellow-400">Optional:</span> If not provided, a placeholder will be used and you'll need to update it in GTM.
+                            <span className="text-yellow-400">Optional:</span> If not provided, a placeholder will be used and you&apos;ll need to update it in GTM.
                           </p>
                         </div>
                       </div>
