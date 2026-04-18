@@ -130,6 +130,9 @@ export default function MigrationWorkspace() {
   const [workspaceTab, setWorkspaceTab] = useState<'review' | 'deployment'>('review');
   const deploymentLogRef = useRef<HTMLDivElement>(null);
 
+  // Meta Pixel Access Token state
+  const [metaAccessToken, setMetaAccessToken] = useState('');
+
   // Deployment rules state
   const [deploymentRules, setDeploymentRules] = useState({
     debugMode: false,
@@ -1548,6 +1551,47 @@ export default function MigrationWorkspace() {
                   )}
                 </section>
 
+                {/* Meta Pixel Access Token */}
+                {(() => {
+                  const hasMetaPixelTags = approvedMappingsList.some((m) =>
+                    m.category?.toLowerCase() === 'meta' ||
+                    m.clientTagType?.toLowerCase().includes('meta') ||
+                    m.clientTagType?.toLowerCase().includes('facebook') ||
+                    m.clientTagName?.toLowerCase().includes('meta') ||
+                    m.clientTagName?.toLowerCase().includes('facebook')
+                  );
+
+                  if (!hasMetaPixelTags) return null;
+
+                  return (
+                    <section>
+                      <h3 className="text-sm text-[#bacbbe] mb-4 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-xs">key</span> Meta Pixel Configuration
+                      </h3>
+                      <div className="bg-[#1c1b1b] rounded-lg p-4 border border-white/5">
+                        <p className="text-xs text-[#bacbbe] mb-3">
+                          You have Meta Pixel tags in this deployment. Please provide your Meta Conversions API Access Token.
+                        </p>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase tracking-wider text-[#bacbbe]">
+                            Meta Access Token
+                          </label>
+                          <input
+                            className="w-full bg-[#353535] border-none rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-[#41ffaf]/40 transition-all font-mono"
+                            placeholder="Enter your Meta Conversions API access token"
+                            type="password"
+                            value={metaAccessToken}
+                            onChange={(e) => setMetaAccessToken(e.target.value)}
+                          />
+                          <p className="text-[10px] text-[#bacbbe]/80 mt-2">
+                            <span className="text-yellow-400">Optional:</span> If not provided, a placeholder will be used and you'll need to update it in GTM.
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  );
+                })()}
+
                 {/* Deployment Rules */}
                 <section>
                   <h3 className="text-sm text-[#bacbbe] mb-4 flex items-center gap-2">
@@ -1641,6 +1685,9 @@ export default function MigrationWorkspace() {
                           );
                         }
                         addLog('⏳ Sending deploy request to API (this may take a minute)...');
+                        if (metaAccessToken) {
+                          addLog('🔑 Using provided Meta Access Token');
+                        }
                         const result = await apiClient.deployApprovedTags(
                           runId,
                           Array.from(approvedTags),
@@ -1648,7 +1695,8 @@ export default function MigrationWorkspace() {
                           clientWorkspacePath,
                           serverContainerPath,
                           transport_url,
-                          gtmSessionId
+                          gtmSessionId,
+                          metaAccessToken || undefined
                         );
                         processDeploymentResult(result);
                         try {

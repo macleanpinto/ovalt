@@ -329,7 +329,8 @@ class APIClient {
     clientWorkspacePath: string,
     serverContainerPath: string,
     transport_url: string,
-    gtmSessionId: string
+    gtmSessionId: string,
+    metaAccessToken?: string
   ): Promise<any> {
     return this.request(`/migrations/${runId}/deploy-approved-v2`, {
       method: 'POST',
@@ -339,7 +340,8 @@ class APIClient {
         clientContainerPath,
         clientWorkspacePath,
         serverContainerPath,
-        transport_url
+        transport_url,
+        metaAccessToken
       })
     });
   }

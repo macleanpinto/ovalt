@@ -1403,13 +1403,15 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     clientContainerPath,
     clientWorkspacePath,
     serverContainerPath,
-    transport_url
+    transport_url,
+    metaAccessToken
   } = req.body as {
     approvedTagIds: string[];
     clientContainerPath: string;
     clientWorkspacePath: string;
     serverContainerPath: string;
     transport_url: string;
+    metaAccessToken?: string;
   };
 
   // Validate required fields
@@ -1461,6 +1463,7 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
   function getTagCategory(tagType: string): string | null {
     if (['gaawe', 'googtag', 'gaawc'].includes(tagType)) return 'ga4';
     if (['awct', 'sp'].includes(tagType)) return 'googads';
+    if (tagType.startsWith('cvt_')) return 'meta'; // Custom Variable Template (Meta Pixel)
     return null;
   }
 
@@ -1491,7 +1494,8 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
         serverContainerPath,
         serverContainerUrl: transport_url,
         approvedTagIds,
-        tagsByType: tagsByCategory
+        tagsByType: tagsByCategory,
+        metaAccessToken
       },
       app.log
     );

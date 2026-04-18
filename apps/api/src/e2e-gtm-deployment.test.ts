@@ -132,28 +132,15 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
     console.log('═══════════════════════════════════════════════════════════\n');
 
     // =========================================================================
-    // STEP 1: Load Ovalt Client Container from Fixture
+    // STEP 1: Fetch Live Workspace Data from GTM
     // =========================================================================
-    console.log('📥 STEP 1: Loading Ovalt Client Container');
+    console.log('📥 STEP 1: Fetching Live Workspace Data from GTM');
     console.log('─────────────────────────────────────────────────────────\n');
-
-    const fixturePath = path.join(repoRoot, 'test-fixtures', 'ovalt-container-export.json');
-    if (!existsSync(fixturePath)) {
-      console.error('❌ Container fixture not found at:', fixturePath);
-      console.error('   Run: node scripts/export-ovalt-container.mjs');
-      throw new Error('Container fixture missing');
-    }
-
-    const containerExport = JSON.parse(readFileSync(fixturePath, 'utf8'));
 
     console.log(`   Client Container: ${CLIENT_CONTAINER_PATH}`);
     console.log(`   Workspace: ${CLIENT_WORKSPACE_PATH}`);
-    console.log(`   ✅ Loaded container from fixture`);
-    console.log(`   Tags: ${containerExport.containerVersion?.tag?.length || 0}`);
-    console.log(`   Triggers: ${containerExport.containerVersion?.trigger?.length || 0}`);
-    console.log(`   Variables: ${containerExport.containerVersion?.variable?.length || 0}\n`);
 
-    // Setup GTM client for deployment steps
+    // Setup GTM client
     const clientId = process.env.GTM_OAUTH_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID;
     const clientSecret = process.env.GTM_OAUTH_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET;
 
@@ -165,6 +152,56 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
 
     oauth2Client.setCredentials(oauthTokens);
     const tm = google.tagmanager({ version: 'v2', auth: oauth2Client });
+
+    // Create a temporary workspace to get all container data
+    console.log('   📡 Creating temporary workspace to fetch all tags...');
+    const tempWorkspace = await tm.accounts.containers.workspaces.create({
+      parent: CLIENT_CONTAINER_PATH,
+      requestBody: {
+        name: 'E2E Test Temp Workspace',
+        description: 'Temporary workspace for E2E test data export'
+      }
+    });
+
+    const tempWorkspacePath = tempWorkspace.data.path!;
+    console.log(`   ✅ Created temp workspace: ${tempWorkspacePath}`);
+
+    // Fetch all entities from temp workspace (auto-copied from container)
+    console.log('   📡 Fetching tags, triggers, and variables...');
+    const [tagsRes, triggersRes, variablesRes] = await Promise.all([
+      tm.accounts.containers.workspaces.tags.list({ parent: tempWorkspacePath }),
+      tm.accounts.containers.workspaces.triggers.list({ parent: tempWorkspacePath }),
+      tm.accounts.containers.workspaces.variables.list({ parent: tempWorkspacePath })
+    ]);
+
+    const tags = tagsRes.data.tag || [];
+    const triggers = triggersRes.data.trigger || [];
+    const variables = variablesRes.data.variable || [];
+
+    console.log(`   ✅ Fetched container data`);
+    console.log(`   Tags: ${tags.length}`);
+    console.log(`   Triggers: ${triggers.length}`);
+    console.log(`   Variables: ${variables.length}`);
+
+    // Delete temp workspace
+    await tm.accounts.containers.workspaces.delete({ path: tempWorkspacePath });
+    console.log(`   ✅ Deleted temp workspace\n`);
+
+    // Create container export format
+    const containerExport = {
+      exportFormatVersion: 2,
+      exportTime: new Date().toISOString(),
+      containerVersion: {
+        path: CLIENT_WORKSPACE_PATH,
+        accountId: CLIENT_CONTAINER_PATH.split('/')[1],
+        containerId: CLIENT_CONTAINER_PATH.split('/')[3],
+        containerVersionId: '0',
+        name: 'Live Container Export',
+        tag: tags,
+        trigger: triggers,
+        variable: variables
+      }
+    };
 
     // =========================================================================
     // STEP 2: Import Container into Tag Relay
@@ -305,22 +342,18 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
     const report = reportResponse.json();
     console.log(`   Tags analyzed: ${report.detectedTags?.length || 0}`);
 
+    // Approve ALL tags for migration (E2E test approves everything)
     const approvedTagIds: string[] = [];
     if (report.detectedTags) {
       for (const tag of report.detectedTags) {
-        // Approve tags with status 'ready' (high confidence) or 'needs_review' (provisional)
-        if (tag.status === 'ready' || tag.status === 'needs_review') {
-          approvedTagIds.push(tag.id);
-          const mapping = report.mappings?.find((m: any) => m.clientTagId === tag.id);
-          const conf = mapping?.confidence || 'unknown';
-          console.log(`   ✅ Approved: ${tag.name} (confidence: ${conf}/10, status: ${tag.status})`);
-        } else {
-          console.log(`   ⚠️  Skipped: ${tag.name} (status: ${tag.status})`);
-        }
+        approvedTagIds.push(tag.id);
+        const mapping = report.mappings?.find((m: any) => m.clientTagId === tag.id);
+        const conf = mapping?.confidence || 'unknown';
+        console.log(`   ✅ Approved: ${tag.name} (confidence: ${conf}/10, status: ${tag.status})`);
       }
     }
 
-    console.log(`\n   Total tags to deploy: ${approvedTagIds.length}\n`);
+    console.log(`\n   Total tags to deploy: ${approvedTagIds.length} (ALL TAGS)\n`);
 
     if (approvedTagIds.length === 0) {
       console.log('   ℹ️  No tags to deploy\n');
@@ -328,12 +361,18 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
     }
 
     // =========================================================================
-    // STEP 5.5: Ensure GTM Workspace Has Google Tag (for server routing test)
+    // STEP 5.5: Skip Manual Workspace Preparation
     // =========================================================================
-    console.log('🏗️  STEP 5.5: Preparing GTM Workspace for Deployment');
+    // Our deployment code now creates "Ovalt Migration Workspace" automatically
+    // and handles all tag modifications, so manual preparation is no longer needed
+    console.log('🏗️  STEP 5.5: Workspace Preparation');
     console.log('─────────────────────────────────────────────────────────\n');
 
-    console.log('   Ensuring workspace has a Google Tag (googtag) for server routing...\n');
+    console.log('   ℹ️  Deployment will create fresh "Ovalt Migration Workspace"');
+    console.log('   ℹ️  Deployment will handle all tag modifications automatically\n');
+
+    // Skip all the manual tag/trigger creation - our deployment code handles it
+    /* COMMENTED OUT - No longer needed as deployment creates fresh workspace
 
     // Check if workspace already has a Google Tag
     const existingTags = await tm.accounts.containers.workspaces.tags.list({
@@ -345,6 +384,38 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
 
     if (!hasGoogleTag) {
       console.log('   📝 Creating Google Tag in workspace...');
+
+      // First, get existing triggers to find one we can use
+      const triggersResult = await tm.accounts.containers.workspaces.triggers.list({
+        parent: CLIENT_WORKSPACE_PATH
+      });
+
+      let triggerIdToUse: string;
+
+      const allPagesTrigger = triggersResult.data.trigger?.find((t: any) =>
+        t.name?.toLowerCase().includes('all') || t.type === 'PAGEVIEW' || t.type === 'pageview'
+      );
+
+      if (allPagesTrigger) {
+        triggerIdToUse = allPagesTrigger.triggerId!;
+        console.log(`   Using existing trigger: ${allPagesTrigger.name} (ID: ${triggerIdToUse})`);
+      } else if (triggersResult.data.trigger && triggersResult.data.trigger.length > 0) {
+        triggerIdToUse = triggersResult.data.trigger[0].triggerId!;
+        console.log(`   Using existing trigger: ${triggersResult.data.trigger[0].name} (ID: ${triggerIdToUse})`);
+      } else {
+        // No triggers exist, create one
+        console.log('   📝 Creating All Pages trigger...');
+        const newTrigger = await tm.accounts.containers.workspaces.triggers.create({
+          parent: CLIENT_WORKSPACE_PATH,
+          requestBody: {
+            name: 'All Pages (Test)',
+            type: 'PAGEVIEW',
+            notes: 'Created by E2E test'
+          }
+        });
+        triggerIdToUse = newTrigger.data.triggerId!;
+        console.log(`   ✅ Trigger created (ID: ${triggerIdToUse})`);
+      }
 
       // Create a Google Tag (GA4 config tag that supports transport_url)
       const createResult = await tm.accounts.containers.workspaces.tags.create({
@@ -359,8 +430,8 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
               value: '{{GA4 - ID}}'
             }
           ],
-          firingTriggerId: ['55'], // DOM Ready trigger
-          notes: 'Created by E2E test to verify transport_url deployment'
+          firingTriggerId: [triggerIdToUse],
+          notes: 'Created by E2E test to verify server_container_url deployment'
         }
       });
 
@@ -439,6 +510,7 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
         console.log();
       }
     }
+    */ // End of commented section
 
     // =========================================================================
     // STEP 6: Deploy Migration (Client + Server)
