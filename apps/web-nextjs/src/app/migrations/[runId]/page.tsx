@@ -533,27 +533,32 @@ export default function MigrationWorkspace() {
         // Handle deployment status updates - only log when status changes
         const currentDeploymentStatus = (runData as any).deploymentStatus || '';
         if (currentDeploymentStatus && currentDeploymentStatus !== pollingStateRef.current.previousDeploymentStatus) {
-          if (currentDeploymentStatus === 'completed' && pollingStateRef.current.previousDeploymentStatus === 'deploying') {
-            addLog('✅ Deployment completed successfully');
-            if ((runData as any).deploymentHistory && (runData as any).deploymentHistory.length > 0) {
-              const lastDep = (runData as any).deploymentHistory[(runData as any).deploymentHistory.length - 1];
-              if (lastDep.tagsModified) {
-                addLog(`✅ ${lastDep.tagsModified} tags modified in client workspace`);
-              }
-              if (lastDep.deployed) {
-                addLog(`✅ ${lastDep.deployed} server-side tags created`);
-              }
-              if (lastDep.clientWorkspacePath) {
-                addLog(`📦 Client workspace: ${lastDep.clientWorkspaceName || 'Migration Workspace'}`);
-              }
-              if (lastDep.serverWorkspacePath) {
-                addLog(`📦 Server workspace: ${lastDep.serverWorkspaceName || 'Migration Workspace'}`);
+          if (currentDeploymentStatus === 'completed') {
+            // Always clear deploying UI when API says completed (also fixes fast deploys where we never polled "deploying")
+            if (pollingStateRef.current.previousDeploymentStatus === 'deploying') {
+              addLog('✅ Deployment completed successfully');
+              if ((runData as any).deploymentHistory && (runData as any).deploymentHistory.length > 0) {
+                const lastDep = (runData as any).deploymentHistory[(runData as any).deploymentHistory.length - 1];
+                if (lastDep.tagsModified) {
+                  addLog(`✅ ${lastDep.tagsModified} tags modified in client workspace`);
+                }
+                if (lastDep.deployed) {
+                  addLog(`✅ ${lastDep.deployed} server-side tags created`);
+                }
+                if (lastDep.clientWorkspacePath) {
+                  addLog(`📦 Client workspace: ${lastDep.clientWorkspaceName || 'Migration Workspace'}`);
+                }
+                if (lastDep.serverWorkspacePath) {
+                  addLog(`📦 Server workspace: ${lastDep.serverWorkspaceName || 'Migration Workspace'}`);
+                }
               }
             }
             setIsDeploying(false);
-          } else if (currentDeploymentStatus === 'failed' && pollingStateRef.current.previousDeploymentStatus === 'deploying') {
+          } else if (currentDeploymentStatus === 'failed') {
             const errorMsg = (runData as any).deploymentError || 'Unknown error';
-            addLog(`❌ Deployment failed: ${errorMsg}`);
+            if (pollingStateRef.current.previousDeploymentStatus === 'deploying') {
+              addLog(`❌ Deployment failed: ${errorMsg}`);
+            }
             setIsDeploying(false);
           } else if (currentDeploymentStatus === 'deploying' && pollingStateRef.current.previousDeploymentStatus !== 'deploying') {
             addLog('⏳ Deployment in progress...');
@@ -562,10 +567,13 @@ export default function MigrationWorkspace() {
         }
         pollingStateRef.current.previousDeploymentStatus = currentDeploymentStatus;
 
-        // Stop polling once migration is complete AND not deploying
-        // Check deploymentStatus from API (not isDeploying state) to avoid closure bug
+        // Stop polling only when the migration run is in a terminal workflow state AND no deploy is running.
+        // IMPORTANT: do not stop while status is needs_review — user can start Deploy from this screen; we must
+        // keep polling so deploymentStatus (deploying → completed) is observed; otherwise isDeploying stays true forever.
         const hasActiveDeployment = (runData as any).deploymentStatus === 'deploying';
-        if (runData.status !== 'queued' && runData.status !== 'running' && !hasActiveDeployment) {
+        const isActiveMigrationPhase =
+          runData.status === 'queued' || runData.status === 'running' || runData.status === 'needs_review';
+        if (!isActiveMigrationPhase && !hasActiveDeployment) {
           if (pollInterval) {
             clearInterval(pollInterval);
             pollInterval = null;
