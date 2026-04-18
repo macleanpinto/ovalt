@@ -532,8 +532,10 @@ export default function MigrationWorkspace() {
           }
         }
 
-        // Stop polling once migration is complete and not deploying
-        if (runData.status !== 'queued' && runData.status !== 'running' && !isDeploying) {
+        // Stop polling once migration is complete AND not deploying
+        // Check deploymentStatus from API (not isDeploying state) to avoid closure bug
+        const hasActiveDeployment = (runData as any).deploymentStatus === 'deploying';
+        if (runData.status !== 'queued' && runData.status !== 'running' && !hasActiveDeployment) {
           if (pollInterval) {
             clearInterval(pollInterval);
             pollInterval = null;
