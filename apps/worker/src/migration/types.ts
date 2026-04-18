@@ -83,9 +83,27 @@ export type ParityRow = {
   notes?: string;
 };
 
-export type QueueMessage = {
+export type MigrationMessage = {
+  type?: "migration"; // Optional for backwards compatibility
   runId: string;
   importId: string;
   projectId: string;
   rulesetVersion: string;
 };
+
+export type DeploymentMessage = {
+  type: "deployment";
+  runId: string;
+  gtmSessionId: string;
+  deploymentConfig: {
+    clientContainerPath: string;
+    clientWorkspacePath: string;
+    serverContainerPath: string;
+    serverContainerUrl: string;
+    approvedTagIds: string[];
+    tagsByCategory: Record<string, string[]>;
+    metaAccessToken?: string;
+  };
+};
+
+export type QueueMessage = MigrationMessage | DeploymentMessage;

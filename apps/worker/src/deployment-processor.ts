@@ -1,11 +1,11 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
-import type { QueueMessage } from './migration/types.js';
+import type { DeploymentMessage } from './migration/types.js';
 import { z } from 'zod';
+import { OAuth2Client } from 'google-auth-library';
 
-// Import deployment logic from API
+// Import deployment logic from API (esbuild will bundle it)
 import { deployMigrationWithExportImport } from '../../api/src/gtm-migration-deploy.js';
-import { getOAuthClient } from '../../api/src/auth-service.js';
 
 const env = z
   .object({
@@ -19,10 +19,20 @@ const env = z
 const ddb = new DynamoDBClient({ region: env.AWS_REGION, endpoint: env.AWS_ENDPOINT });
 const ddbDoc = DynamoDBDocumentClient.from(ddb);
 
-export async function processDeployment(message: Extract<QueueMessage, { type: 'deployment' }>): Promise<void> {
-  const { runId, deploymentConfig, gtmSessionId } = message;
+// Simple logger for worker
+const logger = {
+  info: (obj: any, msg?: string) => console.log(JSON.stringify({ level: 'info', ...obj, msg })),
+  error: (obj: any, msg?: string) => console.error(JSON.stringify({ level: 'error', ...obj, msg })),
+  warn: (obj: any, msg?: string) => console.warn(JSON.stringify({ level: 'warn', ...obj, msg })),
+};
 
-  console.log('Processing deployment', { runId, tagCount: deploymentConfig.approvedTagIds.length });
+export async function processDeployment(message: DeploymentMessage): Promise<void> {
+  const { runId, gtmSessionId, deploymentConfig } = message;
+
+  logger.info(
+    { runId, tagCount: deploymentConfig.approvedTagIds.length },
+    'Processing deployment from SQS'
+  );
 
   try {
     // Get GTM OAuth session from DynamoDB
@@ -37,10 +47,17 @@ export async function processDeployment(message: Extract<QueueMessage, { type: '
       throw new Error('GTM session not found or expired');
     }
 
-    const auth = getOAuthClient(sessionResult.Item.tokens);
+    // Create OAuth2Client from stored tokens
+    const tokens = sessionResult.Item.tokens;
+    const auth = new OAuth2Client();
+    auth.setCredentials({
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expiry_date: tokens.expiry_date,
+    });
 
-    // Convert tagsByType back to Map
-    const tagsByType = new Map(Object.entries(deploymentConfig.tagsByType));
+    // Convert tagsByCategory back to Map
+    const tagsByCategory = new Map(Object.entries(deploymentConfig.tagsByCategory));
 
     // Execute deployment
     const result = await deployMigrationWithExportImport(
@@ -51,10 +68,10 @@ export async function processDeployment(message: Extract<QueueMessage, { type: '
         serverContainerPath: deploymentConfig.serverContainerPath,
         serverContainerUrl: deploymentConfig.serverContainerUrl,
         approvedTagIds: deploymentConfig.approvedTagIds,
-        tagsByType,
+        tagsByType: tagsByCategory,
         metaAccessToken: deploymentConfig.metaAccessToken
       },
-      console // Use console for logging in worker
+      logger
     );
 
     // Save successful deployment to DynamoDB
@@ -62,22 +79,26 @@ export async function processDeployment(message: Extract<QueueMessage, { type: '
       new UpdateCommand({
         TableName: env.DDB_TABLE_RUNS,
         Key: { runId },
-        UpdateExpression: 'SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp, deploymentStatus = :status, deploymentCompletedAt = :completed',
+        UpdateExpression:
+          'SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), ' +
+          'lastDeployedAt = :timestamp, deploymentStatus = :status, deploymentCompletedAt = :completed',
         ExpressionAttributeValues: {
           ':empty': [],
-          ':deployment': [{
-            timestamp: new Date().toISOString(),
-            deployed: result.serverTagsCreated.length,
-            tagsModified: result.tagsModified,
-            clientWorkspacePath: result.clientWorkspacePath,
-            clientWorkspaceName: result.clientWorkspaceName,
-            serverWorkspacePath: result.serverWorkspacePath,
-            serverWorkspaceName: result.serverWorkspaceName,
-            serverContainerUrl: deploymentConfig.serverContainerUrl,
-            serverTags: result.serverTagsCreated,
-            deployedTagIds: deploymentConfig.approvedTagIds,
-            success: true
-          }],
+          ':deployment': [
+            {
+              timestamp: new Date().toISOString(),
+              deployed: result.serverTagsCreated.length,
+              tagsModified: result.tagsModified,
+              clientWorkspacePath: result.clientWorkspacePath,
+              clientWorkspaceName: result.clientWorkspaceName,
+              serverWorkspacePath: result.serverWorkspacePath,
+              serverWorkspaceName: result.serverWorkspaceName,
+              serverContainerUrl: deploymentConfig.serverContainerUrl,
+              serverTags: result.serverTagsCreated,
+              deployedTagIds: deploymentConfig.approvedTagIds,
+              success: true
+            }
+          ],
           ':timestamp': new Date().toISOString(),
           ':status': 'completed',
           ':completed': new Date().toISOString()
@@ -85,9 +106,9 @@ export async function processDeployment(message: Extract<QueueMessage, { type: '
       })
     );
 
-    console.log('Deployment completed successfully', { runId, deployed: result.tagsModified });
+    logger.info({ runId, deployed: result.tagsModified }, 'Deployment completed successfully');
   } catch (err) {
-    console.error('Deployment failed', { err, runId });
+    logger.error({ err, runId }, 'Deployment failed');
     const message = err instanceof Error ? err.message : 'Deployment failed';
 
     // Save failed deployment to DynamoDB
@@ -95,16 +116,20 @@ export async function processDeployment(message: Extract<QueueMessage, { type: '
       new UpdateCommand({
         TableName: env.DDB_TABLE_RUNS,
         Key: { runId },
-        UpdateExpression: 'SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), deploymentStatus = :status, deploymentCompletedAt = :completed, deploymentError = :error',
+        UpdateExpression:
+          'SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), ' +
+          'deploymentStatus = :status, deploymentCompletedAt = :completed, deploymentError = :error',
         ExpressionAttributeValues: {
           ':empty': [],
-          ':deployment': [{
-            timestamp: new Date().toISOString(),
-            deployed: 0,
-            failed: deploymentConfig.approvedTagIds.length,
-            error: message,
-            success: false
-          }],
+          ':deployment': [
+            {
+              timestamp: new Date().toISOString(),
+              deployed: 0,
+              failed: deploymentConfig.approvedTagIds.length,
+              error: message,
+              success: false
+            }
+          ],
           ':status': 'failed',
           ':completed': new Date().toISOString(),
           ':error': message
@@ -112,6 +137,7 @@ export async function processDeployment(message: Extract<QueueMessage, { type: '
       })
     );
 
+    // Re-throw so SQS knows the message failed
     throw err;
   }
 }

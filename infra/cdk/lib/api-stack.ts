@@ -107,19 +107,21 @@ export class TagRelayApiStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../../apps/worker/dist', {
         exclude: ['*.map'],
       }),
-      timeout: cdk.Duration.seconds(300), // 5 minutes (for GTM deployments)
+      timeout: cdk.Duration.seconds(900), // 15 minutes (for complex GTM deployments)
       memorySize: 2048,
       environment: {
         ENVIRONMENT: environment,
         // AWS_REGION is automatically set by Lambda runtime
         DDB_TABLE_IMPORTS: props.importsTable.tableName,
         DDB_TABLE_RUNS: props.runsTable.tableName,
+        DDB_TABLE_SESSIONS: props.sessionsTable.tableName,
         S3_BUCKET: props.artifactsBucket.bucketName,
       },
     });
 
     // Grant permissions
     props.importsTable.grantReadWriteData(this.workerFunction);
+    props.sessionsTable.grantReadData(this.workerFunction); // For GTM OAuth tokens
     props.runsTable.grantReadWriteData(this.workerFunction);
     props.artifactsBucket.grantReadWrite(this.workerFunction);
     props.migrationQueue.grantConsumeMessages(this.workerFunction);

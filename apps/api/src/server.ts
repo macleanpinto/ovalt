@@ -1543,88 +1543,34 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     })
   );
 
-  // Return 202 immediately, then process deployment synchronously
-  // Lambda has 5min timeout, API Gateway will timeout at 30s but Lambda continues
-  reply.code(202).send({
-    message: "Deployment started",
+  // Queue deployment to SQS - worker Lambda will process it
+  await sqs.send(
+    new SendMessageCommand({
+      QueueUrl: env.SQS_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        type: "deployment",
+        runId,
+        gtmSessionId: sessionId,
+        deploymentConfig: {
+          clientContainerPath,
+          clientWorkspacePath,
+          serverContainerPath,
+          serverContainerUrl: transport_url,
+          approvedTagIds,
+          tagsByCategory: Object.fromEntries(tagsByCategory),
+          metaAccessToken
+        }
+      })
+    })
+  );
+
+  // Return 202 immediately - UI will poll GET /migrations/:runId for status
+  return reply.code(202).send({
+    message: "Deployment queued - poll status endpoint for progress",
     status: "deploying",
     runId,
     approvedTagIds
   });
-
-  // Process deployment synchronously (Lambda continues after response sent)
-  try {
-    const { deployMigrationWithExportImport } = await import('./gtm-migration-deploy.js');
-
-    const result = await deployMigrationWithExportImport(
-      auth,
-      {
-        clientContainerPath,
-        clientWorkspacePath,
-        serverContainerPath,
-        serverContainerUrl: transport_url,
-        approvedTagIds,
-        tagsByType: tagsByCategory,
-        metaAccessToken
-      },
-      app.log
-    );
-
-    // Save successful deployment
-    await ddbDoc.send(
-      new UpdateCommand({
-        TableName: env.DDB_TABLE_RUNS,
-        Key: { runId },
-        UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), lastDeployedAt = :timestamp, deploymentStatus = :status, deploymentCompletedAt = :completed",
-        ExpressionAttributeValues: {
-          ":empty": [],
-          ":deployment": [{
-            timestamp: new Date().toISOString(),
-            deployed: result.serverTagsCreated.length,
-            tagsModified: result.tagsModified,
-            clientWorkspacePath: result.clientWorkspacePath,
-            clientWorkspaceName: result.clientWorkspaceName,
-            serverWorkspacePath: result.serverWorkspacePath,
-            serverWorkspaceName: result.serverWorkspaceName,
-            serverContainerUrl: transport_url,
-            serverTags: result.serverTagsCreated,
-            deployedTagIds: approvedTagIds,
-            success: true
-          }],
-          ":timestamp": new Date().toISOString(),
-          ":status": "completed",
-          ":completed": new Date().toISOString()
-        }
-      })
-    );
-
-    app.log.info({ runId, deployed: result.tagsModified }, 'Deployment completed successfully');
-  } catch (err) {
-    app.log.error({ err, runId }, 'Deployment failed');
-    const message = err instanceof Error ? err.message : 'Deployment failed';
-
-    // Save failed deployment
-    await ddbDoc.send(
-      new UpdateCommand({
-        TableName: env.DDB_TABLE_RUNS,
-        Key: { runId },
-        UpdateExpression: "SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), deploymentStatus = :status, deploymentCompletedAt = :completed, deploymentError = :error",
-        ExpressionAttributeValues: {
-          ":empty": [],
-          ":deployment": [{
-            timestamp: new Date().toISOString(),
-            deployed: 0,
-            failed: approvedTagIds.length,
-            error: message,
-            success: false
-          }],
-          ":status": "failed",
-          ":completed": new Date().toISOString(),
-          ":error": message
-        }
-      })
-    );
-  }
 });
 
 // Keep old endpoint for backwards compatibility

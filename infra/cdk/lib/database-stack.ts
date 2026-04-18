@@ -212,7 +212,7 @@ export class TagRelayDatabaseStack extends cdk.Stack {
     // Main migration queue
     this.migrationQueue = new sqs.Queue(this, 'MigrationQueue', {
       queueName: `tag-relay-migrations-${environment}`,
-      visibilityTimeout: cdk.Duration.seconds(300), // 5 minutes (worker Lambda timeout + buffer)
+      visibilityTimeout: cdk.Duration.seconds(900), // 15 minutes (matches worker Lambda timeout)
       retentionPeriod: cdk.Duration.days(4),
       deadLetterQueue: {
         queue: dlq,
