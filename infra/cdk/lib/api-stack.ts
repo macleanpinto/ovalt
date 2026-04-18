@@ -61,7 +61,7 @@ export class TagRelayApiStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../../apps/api/dist', {
         exclude: ['*.map'],
       }),
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(300), // 5 minutes for GTM deployment operations
       memorySize: 1024,
       environment: {
         ENVIRONMENT: environment,
