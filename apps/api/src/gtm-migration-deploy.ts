@@ -151,6 +151,7 @@ function mapClientTypeToServerType(clientType: string, category?: string): strin
     'gaawc': 'sgtmgaaw',      // GA4 Config → Server GA4
     'awct': 'googads',        // Google Ads Conversion → Server Google Ads (via template)
     'sp': 'googads',          // Google Ads Remarketing → Server Google Ads (via template)
+    'gclidw': 'sgtmadscl',    // Conversion Linker → Server Conversion Linker
   };
 
   // Handle by category for custom templates
@@ -714,8 +715,8 @@ export async function deployMigrationWithExportImport(
       continue;
     }
 
-    // Update GA4 Config tags (googtag) in place
-    if (tag.type !== 'googtag') {
+    // Update GA4 Config tags (googtag) and Conversion Linker (gclidw) in place
+    if (tag.type !== 'googtag' && tag.type !== 'gclidw') {
       log.info({ tagName: tag.name, tagType: tag.type }, 'Skipping tag - not modified');
       continue;
     }
@@ -734,6 +735,7 @@ export async function deployMigrationWithExportImport(
             tagFiringOption: tag.tagFiringOption,
             monitoringMetadata: tag.monitoringMetadata,
             consentSettings: tag.consentSettings,
+            paused: tag.paused,  // Important: include paused status
             notes: tag.notes,
             fingerprint: tag.fingerprint  // Required for updates
           }
@@ -745,6 +747,8 @@ export async function deployMigrationWithExportImport(
         log.info({ tagName: tag.name, tagType: tag.type }, 'Updated GA4 Config tag with server routing');
       } else if (tag.type === 'gaawe') {
         log.info({ tagName: tag.name, tagType: tag.type }, 'Converted Google Ads tag to GA4 Event tag');
+      } else if (tag.type === 'gclidw') {
+        log.info({ tagName: tag.name, tagType: tag.type }, 'Paused Conversion Linker tag');
       }
 
       await delay(2500);
