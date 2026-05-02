@@ -293,7 +293,13 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
 
       migrationStatus = statusResponse.json();
 
-      if (migrationStatus.status === 'completed' || migrationStatus.status === 'failed') {
+      // Accept needs_review as a valid post-analysis state — that's the pipeline's normal
+      // terminal status awaiting user approval, not a failure.
+      if (
+        migrationStatus.status === 'completed' ||
+        migrationStatus.status === 'needs_review' ||
+        migrationStatus.status === 'failed'
+      ) {
         console.log(`   ✅ Migration ${migrationStatus.status} after ${attempt} seconds`);
         break;
       }
@@ -311,8 +317,8 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
 
-    if (migrationStatus.status !== 'completed') {
-      console.log('   ⚠️  Migration did not complete successfully');
+    if (migrationStatus.status !== 'completed' && migrationStatus.status !== 'needs_review') {
+      console.log('   ⚠️  Migration did not reach a deploy-ready state');
       console.log(`   Final status: ${migrationStatus.status}\n`);
       return;
     }
