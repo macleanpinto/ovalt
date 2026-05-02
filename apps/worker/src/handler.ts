@@ -1,5 +1,5 @@
 import type { SQSEvent } from "aws-lambda";
-import type { QueueMessage } from "./migration/types.js";
+import type { MigrationMessage, QueueMessage } from "./migration/types.js";
 import { processRun } from "./processor.js";
 
 /**
@@ -11,7 +11,7 @@ export async function handler(event: SQSEvent): Promise<{ batchItemFailures: { i
   for (const record of event.Records) {
     try {
       const msg = JSON.parse(record.body) as QueueMessage;
-      await processRun(msg);
+      await processRun(msg as MigrationMessage);
     } catch (err) {
       console.error("[worker-lambda] record failed", record.messageId, err);
       batchItemFailures.push({ itemIdentifier: record.messageId });

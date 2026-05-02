@@ -30,8 +30,9 @@ function OAuthCallbackInner() {
       // Store token
       apiClient.setToken(token);
 
-      // Navigate to dashboard
-      router.push("/dashboard");
+      // Full reload so AuthProvider remounts and loads the user with the new token.
+      // A client-side router.push keeps stale auth state (user === null) and bounces back to /auth/login.
+      window.location.replace("/dashboard");
     };
 
     handleCallback();

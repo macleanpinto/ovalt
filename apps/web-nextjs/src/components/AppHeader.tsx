@@ -16,7 +16,6 @@ export default function AppHeader({ className = '' }: AppHeaderProps) {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close menu when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -29,81 +28,68 @@ export default function AppHeader({ className = '' }: AppHeaderProps) {
 
   const isActive = (path: string) => pathname?.startsWith(path);
 
+  const navLink = (path: string, label: string) => (
+    <Link
+      href={path}
+      className={`text-sm font-medium transition-colors ${
+        isActive(path) ? 'text-[#41ffaf]' : 'text-zinc-400 hover:text-white'
+      }`}
+    >
+      {label}
+    </Link>
+  );
+
   return (
-    <header className={`bg-[#1A1A1A]/80 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center w-full px-8 h-16 border-b border-white/5 ${className}`}>
-      <div className="flex items-center gap-8">
-        <Link href="/dashboard" className="text-xl font-bold tracking-tighter text-[#41ffaf]">
-          Ovalt
-        </Link>
-        <nav className="hidden md:flex gap-6">
+    <header
+      className={`sticky top-0 z-50 w-full border-b border-white/[0.06] bg-[#131313]/85 backdrop-blur-xl ${className}`}
+    >
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-10">
           <Link
-            className={`font-medium transition-colors pb-1 ${
-              isActive('/dashboard')
-                ? 'text-[#41ffaf] font-semibold border-b-2 border-[#41ffaf]'
-                : 'text-gray-400 hover:text-white'
-            }`}
             href="/dashboard"
+            className="text-lg font-semibold tracking-tight text-[#41ffaf] transition-opacity hover:opacity-90"
           >
-            Dashboard
+            Ovalt
           </Link>
-          <Link
-            className={`font-medium transition-colors pb-1 ${
-              isActive('/import')
-                ? 'text-[#41ffaf] font-semibold border-b-2 border-[#41ffaf]'
-                : 'text-gray-400 hover:text-white'
-            }`}
-            href="/imports"
-          >
-            Imports
-          </Link>
-          <Link
-            className={`font-medium transition-colors pb-1 ${
-              isActive('/migration')
-                ? 'text-[#41ffaf] font-semibold border-b-2 border-[#41ffaf]'
-                : 'text-gray-400 hover:text-white'
-            }`}
-            href="/migrations"
-          >
-            Migrations
-          </Link>
-        </nav>
-      </div>
-      <div className="flex items-center gap-3">
-        {user ? (
-          <>
-            <button className="p-2 text-gray-400 hover:bg-white/5 hover:text-white rounded-lg transition-all duration-200">
-              <span className="material-symbols-outlined text-xl">notifications</span>
-            </button>
-            <button className="p-2 text-gray-400 hover:bg-white/5 hover:text-white rounded-lg transition-all duration-200">
-              <span className="material-symbols-outlined text-xl">terminal</span>
-            </button>
+          <nav className="hidden items-center gap-8 md:flex" aria-label="Primary">
+            {navLink('/dashboard', 'Dashboard')}
+            {navLink('/imports', 'Imports')}
+            {navLink('/migrations', 'Migrations')}
+          </nav>
+        </div>
+        <div className="flex items-center gap-2 sm:gap-3">
+          {user ? (
             <div className="relative" ref={menuRef}>
               <button
+                type="button"
                 onClick={() => setShowUserMenu(!showUserMenu)}
-                className="h-9 w-9 rounded-full bg-[#353535] overflow-hidden hover:ring-2 hover:ring-[#41ffaf]/50 transition-all"
+                className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-800 transition-all hover:ring-2 hover:ring-[#41ffaf]/40"
+                aria-expanded={showUserMenu}
+                aria-haspopup="true"
               >
                 {user.avatar ? (
-                  <img src={user.avatar} alt={user.name || user.email} className="w-full h-full object-cover" />
+                  <img src={user.avatar} alt={user.name || user.email} className="h-full w-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-sm font-semibold text-[#41ffaf]">
+                  <span className="text-sm font-semibold text-[#41ffaf]">
                     {(user.name || user.email).charAt(0).toUpperCase()}
-                  </div>
+                  </span>
                 )}
               </button>
 
               {showUserMenu && (
-                <div className="absolute right-0 mt-2 w-56 bg-[#2a2a2a] rounded-lg shadow-xl border border-white/10 py-2 z-50">
-                  <div className="px-4 py-3 border-b border-white/10">
+                <div className="absolute right-0 z-50 mt-2 w-60 overflow-hidden rounded-2xl border border-white/10 bg-[#1c1b1b] py-1 shadow-2xl">
+                  <div className="border-b border-white/10 px-4 py-3">
                     <p className="text-sm font-medium text-white">{user.name || user.email}</p>
-                    <p className="text-xs text-gray-400 mt-1">{user.email}</p>
+                    <p className="mt-0.5 text-xs text-zinc-500">{user.email}</p>
                   </div>
                   <button
+                    type="button"
                     onClick={() => {
                       logout();
                       setShowUserMenu(false);
                       router.push('/');
                     }}
-                    className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2"
+                    className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-zinc-300 transition-colors hover:bg-white/5 hover:text-white"
                   >
                     <span className="material-symbols-outlined text-base">logout</span>
                     Logout
@@ -111,23 +97,23 @@ export default function AppHeader({ className = '' }: AppHeaderProps) {
                 </div>
               )}
             </div>
-          </>
-        ) : (
-          <div className="flex items-center gap-3">
-            <Link
-              href="/login"
-              className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white transition-colors"
-            >
-              Login
-            </Link>
-            <Link
-              href="/register"
-              className="px-4 py-2 text-sm font-semibold bg-[#41ffaf] text-[#003822] rounded-lg hover:opacity-90 transition-all"
-            >
-              Sign Up
-            </Link>
-          </div>
-        )}
+          ) : (
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Link
+                href="/auth/login"
+                className="rounded-full px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:text-white"
+              >
+                Log in
+              </Link>
+              <Link
+                href="/auth/register"
+                className="rounded-full bg-[#41ffaf] px-5 py-2 text-sm font-semibold text-[#003822] transition-opacity hover:opacity-90"
+              >
+                Get started
+              </Link>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

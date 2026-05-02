@@ -7,6 +7,7 @@ import { ProtectedRoute, useAuth } from '@/lib/auth-context';
 import { apiClient, Run } from '@/lib/api-client';
 import { useAlert } from '@/lib/alert-context';
 import AppHeader from '@/components/AppHeader';
+import { RampMain, RampPageHero, RampPanel } from '@/components/ramp-shell';
 
 export default function MigrationsPage() {
   const router = useRouter();
@@ -109,44 +110,42 @@ export default function MigrationsPage() {
       <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
         <AppHeader />
 
-        <main className="p-8">
-          <div className="max-w-7xl mx-auto">
-            {/* Page Header */}
-            <div className="mb-8 flex items-center justify-between">
-              <div>
-                <h1 className="text-3xl font-bold mb-2 text-white headline-font">Migrations</h1>
-                <p className="text-[#bacbbe]">
-                  View all your migration runs
-                </p>
-              </div>
-              <div className="flex gap-3">
-                {runs.length > 0 && (
+        <RampMain>
+          <RampPageHero
+            eyebrow="Migrations"
+            title="All runs"
+            description="Open a run to review mappings and deploy to your server-side container."
+            actions={
+              <div className="flex flex-wrap gap-2">
+                {runs.length > 0 ? (
                   <button
+                    type="button"
                     onClick={async () => {
                       if (!confirm(`Delete all ${runs.length} migration(s)?\n\nThis cannot be undone.`)) {
                         return;
                       }
                       try {
-                        await Promise.all(runs.map(run => apiClient.deleteRun(run.runId)));
+                        await Promise.all(runs.map((run) => apiClient.deleteRun(run.runId)));
                         setRuns([]);
                         alert.success('All migrations deleted');
                       } catch (err: any) {
                         alert.error(`Failed to delete some migrations: ${err.message}`);
                       }
                     }}
-                    className="px-6 py-3 bg-red-500/10 text-red-400 rounded-xl hover:bg-red-500/20 transition-colors label-font border border-red-500/30"
+                    className="rounded-full border border-red-500/35 bg-red-500/10 px-5 py-2.5 text-sm font-medium text-red-300 transition-colors hover:bg-red-500/20"
                   >
-                    Delete All
+                    Delete all
                   </button>
-                )}
+                ) : null}
                 <Link
                   href="/dashboard"
-                  className="px-6 py-3 border border-white/10 text-white rounded-xl hover:bg-white/5 transition-colors label-font"
+                  className="rounded-full border border-white/15 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-white/5"
                 >
-                  Back to Dashboard
+                  Back to dashboard
                 </Link>
               </div>
-            </div>
+            }
+          />
 
           {isLoading ? (
             <div className="flex items-center justify-center min-h-[400px]">
@@ -156,14 +155,12 @@ export default function MigrationsPage() {
               </div>
             </div>
           ) : error ? (
-            <div className="p-6 bg-red-500/10 border border-red-500/30 rounded-xl">
-              <h2 className="text-lg font-semibold text-red-400 mb-2 headline-font">
-                Failed to load migrations
-              </h2>
-              <p className="text-red-400">{error}</p>
-            </div>
+            <RampPanel padding="p-6" className="border-red-500/25 bg-red-500/5">
+              <h2 className="mb-2 text-lg font-semibold text-red-300">Failed to load migrations</h2>
+              <p className="text-red-400/90">{error}</p>
+            </RampPanel>
           ) : runs.length === 0 ? (
-            <div className="bg-[#20201f] border border-white/10 rounded-xl p-12 text-center">
+            <RampPanel padding="p-12 md:p-16" className="text-center">
               <svg className="w-16 h-16 text-white/20 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
@@ -173,15 +170,15 @@ export default function MigrationsPage() {
               </p>
               <Link
                 href="/import"
-                className="inline-block px-6 py-3 bg-[#41ffaf] text-[#003822] rounded-xl font-semibold label-font hover:opacity-90 transition-all"
+                className="inline-block rounded-full bg-[#41ffaf] px-8 py-3 text-sm font-semibold text-[#003822] transition-opacity hover:opacity-90"
               >
-                Import Container
+                Import container
               </Link>
-            </div>
+            </RampPanel>
           ) : (
-            <div className="bg-[#20201f] border border-white/10 rounded-xl shadow-lg overflow-hidden">
+            <RampPanel padding="p-0" className="overflow-hidden">
               {/* Table Header */}
-              <div className="grid grid-cols-12 bg-[#353535]/50 px-6 py-4 border-b border-white/10">
+              <div className="grid grid-cols-12 border-b border-white/[0.08] bg-white/[0.03] px-6 py-4">
                 <div className="col-span-3 font-label text-xs uppercase tracking-widest text-white/50">
                   Run ID
                 </div>
@@ -203,11 +200,11 @@ export default function MigrationsPage() {
               </div>
 
               {/* Table Rows */}
-              <div className="divide-y divide-white/5">
+              <div className="divide-y divide-white/[0.06]">
                 {runs.map((run) => (
                   <div
                     key={run.runId}
-                    className="grid grid-cols-12 px-6 py-5 hover:bg-[#2a2a2a] transition-colors items-center"
+                    className="grid grid-cols-12 items-center px-6 py-5 transition-colors hover:bg-white/[0.03]"
                   >
                     <Link href={`/migrations/${run.runId}`} className="col-span-3">
                       <code className="text-sm text-white font-mono hover:text-[#41ffaf]">{run.runId.slice(0, 12)}...</code>
@@ -254,10 +251,9 @@ export default function MigrationsPage() {
                   </div>
                 ))}
               </div>
-            </div>
+            </RampPanel>
           )}
-          </div>
-        </main>
+        </RampMain>
       </div>
     </ProtectedRoute>
   );

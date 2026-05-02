@@ -7,6 +7,7 @@ import { useAuth, ProtectedRoute } from "@/lib/auth-context";
 import { apiClient, Import, Stats, Run } from "@/lib/api-client";
 import { useAlert } from "@/lib/alert-context";
 import AppHeader from "@/components/AppHeader";
+import { RampMain, RampPageHero, RampPanel } from "@/components/ramp-shell";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -69,14 +70,17 @@ export default function Dashboard() {
   if (isLoading) {
     return (
       <ProtectedRoute>
-        <main className="min-h-screen p-8 bg-[#131313]">
-          <div className="flex items-center justify-center min-h-[400px]">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#41ffaf] mx-auto"></div>
-              <p className="mt-4 text-[#bacbbe]">Loading dashboard...</p>
+        <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
+          <AppHeader />
+          <RampMain>
+            <div className="flex min-h-[50vh] items-center justify-center">
+              <div className="text-center">
+                <div className="mx-auto h-12 w-12 animate-spin rounded-full border-2 border-[#41ffaf] border-t-transparent" />
+                <p className="mt-4 text-zinc-400">Loading dashboard…</p>
+              </div>
             </div>
-          </div>
-        </main>
+          </RampMain>
+        </div>
       </ProtectedRoute>
     );
   }
@@ -84,16 +88,15 @@ export default function Dashboard() {
   if (error) {
     return (
       <ProtectedRoute>
-        <main className="min-h-screen p-8 bg-[#131313]">
-          <div className="max-w-7xl mx-auto">
-            <div className="p-6 bg-red-500/10 border border-red-500/30 rounded-xl">
-              <h2 className="text-lg font-semibold text-red-400 mb-2 headline-font">
-                Failed to load dashboard
-              </h2>
-              <p className="text-red-400">{error}</p>
-            </div>
-          </div>
-        </main>
+        <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
+          <AppHeader />
+          <RampMain>
+            <RampPanel padding="p-6" className="border-red-500/20 bg-red-500/5">
+              <h2 className="mb-2 text-lg font-semibold text-red-300 headline-font">Failed to load dashboard</h2>
+              <p className="text-red-400/90">{error}</p>
+            </RampPanel>
+          </RampMain>
+        </div>
       </ProtectedRoute>
     );
   }
@@ -149,76 +152,71 @@ export default function Dashboard() {
       <div className="min-h-screen bg-[#131313] text-[#e5e2e1]">
         <AppHeader />
 
-        <main className="p-8">
-          <div className="max-w-7xl mx-auto">
-            {/* Page Header */}
-            <div className="mb-8">
-              <h1 className="text-3xl font-bold mb-2 text-white headline-font">Dashboard</h1>
-              <p className="text-[#bacbbe]">
-                Your tag migrations
+        <RampMain>
+          <RampPageHero
+            eyebrow="Workspace"
+            title="Dashboard"
+            description="Monitor imports, migration runs, and continue server-side rollout from one place."
+          />
+
+          {/* Stats — Ramp-like metric tiles */}
+          <div className="mb-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <RampPanel padding="p-6">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Total imports</p>
+              <p className="text-3xl font-semibold tracking-tight text-white">{stats?.totalImports || 0}</p>
+            </RampPanel>
+            <RampPanel padding="p-6">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Migrations</p>
+              <p className="text-3xl font-semibold tracking-tight text-white">{stats?.totalRuns || 0}</p>
+            </RampPanel>
+            <RampPanel padding="p-6">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Success rate</p>
+              <p className="text-3xl font-semibold tracking-tight text-white">{stats?.successRate.toFixed(1) || 0}%</p>
+            </RampPanel>
+            <RampPanel padding="p-6">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Last run</p>
+              <p className="text-sm font-semibold text-white">
+                {stats?.lastRun ? new Date(stats.lastRun).toLocaleDateString() : 'No runs yet'}
               </p>
+            </RampPanel>
+          </div>
+
+          <RampPanel padding="p-6 md:p-8" className="mb-10">
+            <h2 className="mb-6 text-lg font-semibold text-white">Quick actions</h2>
+            <div className="flex flex-wrap gap-3">
+              <Link
+                href="/import"
+                className="rounded-full bg-[#41ffaf] px-6 py-3 text-sm font-semibold text-[#003822] transition-opacity hover:opacity-90"
+              >
+                Import GTM container
+              </Link>
+              <Link
+                href="/imports"
+                className="rounded-full border border-white/15 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-white/5"
+              >
+                View imports
+              </Link>
+              <Link
+                href="/migrations"
+                className="rounded-full border border-white/15 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-white/5"
+              >
+                View migrations
+              </Link>
             </div>
+          </RampPanel>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-              <div className="p-6 bg-[#20201f] border border-white/10 rounded-xl shadow-lg">
-                <p className="text-sm text-[#bacbbe] mb-1 label-font">Total Imports</p>
-                <p className="text-3xl font-bold text-white headline-font">{stats?.totalImports || 0}</p>
-              </div>
-
-              <div className="p-6 bg-[#20201f] border border-white/10 rounded-xl shadow-lg">
-                <p className="text-sm text-[#bacbbe] mb-1 label-font">Migrations</p>
-                <p className="text-3xl font-bold text-white headline-font">{stats?.totalRuns || 0}</p>
-              </div>
-
-              <div className="p-6 bg-[#20201f] border border-white/10 rounded-xl shadow-lg">
-                <p className="text-sm text-[#bacbbe] mb-1 label-font">Success Rate</p>
-                <p className="text-3xl font-bold text-white headline-font">{stats?.successRate.toFixed(1) || 0}%</p>
-              </div>
-
-              <div className="p-6 bg-[#20201f] border border-white/10 rounded-xl shadow-lg">
-                <p className="text-sm text-[#bacbbe] mb-1 label-font">Last Run</p>
-                <p className="text-sm font-semibold text-white">
-                  {stats?.lastRun ? new Date(stats.lastRun).toLocaleDateString() : 'No runs yet'}
-                </p>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="bg-[#20201f] border border-white/10 rounded-xl shadow-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold mb-4 text-white headline-font">Quick Actions</h2>
-              <div className="flex flex-wrap gap-4">
-                <Link
-                  href="/import"
-                  className="px-6 py-3 bg-[#41ffaf] text-[#003822] rounded-xl font-semibold label-font hover:opacity-90 transition-all"
-                >
-                  Import GTM Container
-                </Link>
-                <Link
-                  href="/imports"
-                  className="px-6 py-3 border border-white/10 text-white rounded-xl hover:bg-white/5 transition-colors label-font"
-                >
-                  View Imports
-                </Link>
-                <Link
-                  href="/migrations"
-                  className="px-6 py-3 border border-white/10 text-white rounded-xl hover:bg-white/5 transition-colors label-font"
-                >
-                  View Migrations
-                </Link>
-              </div>
-            </div>
-
-          {/* Recent Activity */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-[#20201f] border border-white/10 rounded-xl shadow-lg p-6">
-              <h2 className="text-xl font-semibold mb-4 text-white headline-font">Recent Imports</h2>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <RampPanel padding="p-6 md:p-8">
+              <h2 className="mb-4 text-lg font-semibold text-white">Recent imports</h2>
               {recentImports.length === 0 ? (
                 <p className="text-[#bacbbe] text-center py-8">No imports yet. Import a GTM container to get started.</p>
               ) : (
                 <div className="space-y-3">
                   {recentImports.map((imp) => (
-                    <div key={imp.importId} className="flex items-center justify-between p-4 border border-white/10 rounded-xl hover:bg-[#2a2a2a] transition-colors">
+                    <div
+                      key={imp.importId}
+                      className="flex items-center justify-between rounded-xl border border-white/[0.06] p-4 transition-colors hover:bg-white/[0.03]"
+                    >
                       <div className="flex-1">
                         <p className="font-semibold text-white">{imp.projectId || 'Imported container'}</p>
                         <p className="text-sm text-[#bacbbe]">{new Date(imp.createdAt).toLocaleString()}</p>
@@ -239,7 +237,7 @@ export default function Dashboard() {
                               alert.error(`Failed to create migration: ${err.message}`);
                             }
                           }}
-                          className="px-4 py-2 bg-[#41ffaf] text-[#003822] rounded-lg text-sm font-semibold label-font hover:opacity-90 transition-all"
+                          className="rounded-full bg-[#41ffaf] px-4 py-2 text-sm font-semibold text-[#003822] transition-opacity hover:opacity-90"
                         >
                           Create Migration
                         </button>
@@ -248,10 +246,10 @@ export default function Dashboard() {
                   ))}
                 </div>
               )}
-            </div>
+            </RampPanel>
 
-            <div className="bg-[#20201f] border border-white/10 rounded-xl shadow-lg p-6">
-              <h2 className="text-xl font-semibold mb-4 text-white headline-font">Recent Migrations</h2>
+            <RampPanel padding="p-6 md:p-8">
+              <h2 className="mb-4 text-lg font-semibold text-white">Recent migrations</h2>
             {recentRuns.length === 0 ? (
               <p className="text-[#bacbbe] text-center py-8">No migrations yet. Create your first migration above!</p>
             ) : (
@@ -260,7 +258,7 @@ export default function Dashboard() {
                   <Link
                     key={run.runId}
                     href={`/migrations/${run.runId}`}
-                    className="flex items-center justify-between p-4 border border-white/10 rounded-xl hover:bg-[#2a2a2a] transition-colors"
+                    className="flex items-center justify-between rounded-xl border border-white/[0.06] p-4 transition-colors hover:bg-white/[0.03]"
                   >
                     <div>
                       <p className="font-semibold text-white">Migration Run {run.runId.slice(0, 8)}</p>
@@ -276,15 +274,11 @@ export default function Dashboard() {
                 ))}
               </div>
             )}
-          </div>
+            </RampPanel>
           </div>
 
-          {/* User Info */}
-          <div className="mt-8 text-center text-sm text-[#bacbbe]/60">
-            <p>👤 Logged in as {user?.email}</p>
-          </div>
-          </div>
-        </main>
+          <p className="mt-10 text-center text-sm text-zinc-600">Signed in as {user?.email}</p>
+        </RampMain>
       </div>
     </ProtectedRoute>
   );

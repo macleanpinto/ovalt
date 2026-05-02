@@ -131,6 +131,8 @@ interface DeploymentResult {
   clientWorkspacePath: string;
   clientWorkspaceName: string;
   tagsModified: number;
+  tagsUpdated?: number;
+  tagsCreated?: number;
   serverWorkspacePath: string;
   serverWorkspaceName: string;
   serverTagsCreated: Array<{
@@ -138,6 +140,9 @@ interface DeploymentResult {
     tagName: string;
     tagType: string;
     handlesClientTags: string[];
+    pixelIdConfigured?: boolean;
+    accessTokenConfigured?: boolean;
+    manualSetup?: { instructions: string[]; error?: string };
   }>;
 }
 
@@ -517,6 +522,10 @@ export async function deployMigrationWithExportImport(
           .replace(/^_+|_+$/g, ''); // Trim underscores from start/end
       }
 
+      if (eventName == null || eventName === '') {
+        eventName = 'event';
+      }
+
       // Prepend meta_ if not already present
       if (!eventName.startsWith('meta_')) {
         eventName = `meta_${eventName || 'event'}`;
@@ -663,11 +672,15 @@ export async function deployMigrationWithExportImport(
 
     // Find the original tag to check its original type
     const originalTag = originalTags.find((t: any) => t.tagId === tag.tagId);
-    const wasConverted = originalTag && ['awct', 'sp'].includes(originalTag.type) ||
-                         (originalTag?.type?.startsWith('cvt') &&
-                          (originalTag.name?.toLowerCase().includes('facebook') ||
-                           originalTag.name?.toLowerCase().includes('meta') ||
-                           originalTag.name?.toLowerCase().includes('pixel')));
+    const originalType = originalTag?.type;
+    const wasConverted = Boolean(
+      (originalTag && ['awct', 'sp'].includes(String(originalType ?? ''))) ||
+        (typeof originalType === 'string' &&
+          originalType.startsWith('cvt') &&
+          (originalTag!.name?.toLowerCase().includes('facebook') ||
+            originalTag!.name?.toLowerCase().includes('meta') ||
+            originalTag!.name?.toLowerCase().includes('pixel')))
+    );
 
     // If this was a conversion tag (Google Ads or Meta), CREATE a new GA4 Event tag instead of updating
     if (wasConverted && tag.type === 'gaawe') {
@@ -693,21 +706,24 @@ export async function deployMigrationWithExportImport(
         log.info({ tagName: `${tag.name} (Server-Side)`, tagType: tag.type }, 'Created new GA4 Event tag for conversion tracking');
 
         // Pause the original tag so it doesn't double-fire
-        try {
-          await gtmCall(log, 'tags.update', () =>
-            tm.accounts.containers.workspaces.tags.update({
-              path: originalTag.path,
-              requestBody: {
-                ...originalTag,
-                paused: true,
-                notes: (originalTag.notes || '') + '\n\n[Paused by Tag Relay] Replaced with GA4 Event tag for server-side conversion tracking',
-                fingerprint: originalTag.fingerprint
-              }
-            })
-          );
-          log.info({ tagName: originalTag.name }, 'Paused original conversion tag');
-        } catch (err: any) {
-          log.warn({ tagName: originalTag.name, err: err.message }, 'Failed to pause original tag');
+        const pauseTagPath = originalTag?.path;
+        if (pauseTagPath) {
+          try {
+            await gtmCall(log, 'tags.update', () =>
+              tm.accounts.containers.workspaces.tags.update({
+                path: pauseTagPath,
+                requestBody: {
+                  ...originalTag,
+                  paused: true,
+                  notes: (originalTag.notes || '') + '\n\n[Paused by Tag Relay] Replaced with GA4 Event tag for server-side conversion tracking',
+                  fingerprint: originalTag.fingerprint
+                }
+              })
+            );
+            log.info({ tagName: originalTag.name }, 'Paused original conversion tag');
+          } catch (err: any) {
+            log.warn({ tagName: originalTag.name, err: err.message }, 'Failed to pause original tag');
+          }
         }
       } catch (err: any) {
         log.error({ tagName: tag.name, err: err.message }, 'Failed to create GA4 Event tag');
@@ -995,12 +1011,7 @@ export async function deployMigrationWithExportImport(
   // ================================================================
   // Create one server tag per category with blocking triggers
   // EXCEPTION: Google Ads and Meta require individual conversion tracking tags
-  const serverTagsCreated: Array<{
-    tagId: string;
-    tagName: string;
-    tagType: string;
-    handlesClientTags: string[];
-  }> = [];
+  const serverTagsCreated: DeploymentResult['serverTagsCreated'] = [];
 
   for (const [category, clientTags] of request.tagsByType.entries()) {
     if (clientTags.length === 0) continue;
@@ -1256,8 +1267,13 @@ export async function deployMigrationWithExportImport(
 
             // Check each workspace for the Meta template
             for (const workspace of allWorkspaces) {
+              const wsPath = workspace.path;
+              if (!wsPath) {
+                log.warn({ workspaceId: workspace.workspaceId }, 'Skipping workspace without path');
+                continue;
+              }
               // Skip the migration workspace we just created (already checked)
-              if (workspace.path === serverWorkspacePath) {
+              if (wsPath === serverWorkspacePath) {
                 log.info({
                   workspaceName: workspace.name,
                   workspaceId: workspace.workspaceId
@@ -1268,13 +1284,13 @@ export async function deployMigrationWithExportImport(
               log.info({
                 workspaceName: workspace.name,
                 workspaceId: workspace.workspaceId,
-                workspacePath: workspace.path
+                workspacePath: wsPath
               }, 'Checking workspace for Meta template');
 
               try {
                 const workspaceTemplates = await gtmCall(log, 'templates.list', () =>
                   tm.accounts.containers.workspaces.templates.list({
-                    parent: workspace.path
+                    parent: wsPath
                   })
                 );
 
@@ -1295,6 +1311,10 @@ export async function deployMigrationWithExportImport(
                 );
 
                 if (foundMetaTemplate) {
+                  if (!foundMetaTemplate.path) {
+                    log.warn({ templateName: foundMetaTemplate.name }, 'Meta template missing path, skipping');
+                    continue;
+                  }
                   log.info({
                     workspaceName: workspace.name,
                     templateName: foundMetaTemplate.name,
@@ -1302,10 +1322,12 @@ export async function deployMigrationWithExportImport(
                     galleryReference: foundMetaTemplate.galleryReference?.repository
                   }, 'Found Meta template in workspace, copying to migration workspace');
 
+                  const metaTemplateSourcePath = foundMetaTemplate.path;
+
                   // Fetch the full template details
                   const fullTemplate = await gtmCall(log, 'templates.get', () =>
                     tm.accounts.containers.workspaces.templates.get({
-                      path: foundMetaTemplate.path
+                      path: metaTemplateSourcePath
                     })
                   );
 
@@ -1346,7 +1368,7 @@ export async function deployMigrationWithExportImport(
 
         if (metaTemplate) {
           // Use the workspace template ID for creating tags
-          metaTemplateType = metaTemplate.templateId;
+          metaTemplateType = metaTemplate.templateId ?? null;
           log.info({
             templateId: metaTemplate.templateId,
             templateName: metaTemplate.name,
@@ -1389,13 +1411,20 @@ export async function deployMigrationWithExportImport(
                   return response;
                 });
 
-                metaTemplate = importedTemplate.data;
+                metaTemplate = importedTemplate.data as any;
+
+                if (!metaTemplate) {
+                  log.warn({ galleryOwner: template.owner }, 'Gallery import returned empty template');
+                  continue;
+                }
+
+                const galleryMeta = metaTemplate;
 
                 log.info({
-                  templateId: metaTemplate.templateId,
-                  templateName: metaTemplate.name,
-                  templatePath: metaTemplate.path,
-                  fingerprint: metaTemplate.fingerprint,
+                  templateId: galleryMeta.templateId,
+                  templateName: galleryMeta.name,
+                  templatePath: galleryMeta.path,
+                  fingerprint: galleryMeta.fingerprint,
                   galleryOwner: template.owner,
                   galleryRepository: template.repo
                 }, 'Successfully imported Meta template from Community Gallery');
@@ -1424,19 +1453,20 @@ export async function deployMigrationWithExportImport(
                 }, 'Templates in workspace after import');
 
                 const importedTemplateInList = relistTemplates.data.template?.find((t: any) =>
-                  t.fingerprint === metaTemplate.fingerprint ||
-                  t.templateId === metaTemplate.templateId ||
-                  t.name === metaTemplate.name
+                  t.fingerprint === galleryMeta.fingerprint ||
+                  t.templateId === galleryMeta.templateId ||
+                  t.name === galleryMeta.name
                 );
 
-                if (importedTemplateInList) {
+                if (importedTemplateInList?.path) {
+                  const listTemplatePath = importedTemplateInList.path;
                   // GROUND TRUTH: Get the CVT ID from templateData
                   // The tag's `type` field must be the `id` from the template's templateData JSON
                   // (e.g., "cvt_5TP8W"), NOT the raw templateId
                   try {
                     const fullTemplate = await gtmCall(log, 'templates.get', () =>
                       tm.accounts.containers.workspaces.templates.get({
-                        path: importedTemplateInList.path
+                        path: listTemplatePath
                       })
                     );
 
@@ -1452,18 +1482,18 @@ export async function deployMigrationWithExportImport(
                         }, 'Extracted CVT ID from templateData for tag creation');
                       } else {
                         log.warn('Could not extract CVT ID from templateData, falling back to templateId');
-                        metaTemplateType = importedTemplateInList.templateId;
+                        metaTemplateType = importedTemplateInList.templateId ?? null;
                       }
                     } else {
-                      metaTemplateType = importedTemplateInList.templateId;
+                      metaTemplateType = importedTemplateInList.templateId ?? null;
                     }
                   } catch (err: any) {
                     log.warn({ err: err.message }, 'Failed to fetch full template, using templateId');
-                    metaTemplateType = importedTemplateInList.templateId;
+                    metaTemplateType = importedTemplateInList.templateId ?? null;
                   }
                 } else {
                   // Fallback: use import response
-                  metaTemplateType = metaTemplate.templateId;
+                  metaTemplateType = galleryMeta.templateId ?? null;
                   log.warn({ metaTemplateType }, 'Template not found in list, using import response templateId');
                 }
 
@@ -1618,6 +1648,10 @@ export async function deployMigrationWithExportImport(
             .replace(/meta\s*[-–—]?\s*/gi, '')
             .replace(/[^a-z0-9]+/g, '_')
             .replace(/^_+|_+$/g, '');
+        }
+
+        if (eventName == null || eventName === '') {
+          eventName = 'event';
         }
 
         // Prepend meta_ if not already present
@@ -1814,9 +1848,14 @@ export async function deployMigrationWithExportImport(
             .replace(/^_+|_+$/g, '');
         }
 
+        let metaEventName: string = eventName ?? 'event';
+        if (metaEventName === '') {
+          metaEventName = 'event';
+        }
+
         // Prepend meta_ if not already present
-        if (!eventName.startsWith('meta_')) {
-          eventName = `meta_${eventName || 'event'}`;
+        if (!metaEventName.startsWith('meta_')) {
+          metaEventName = `meta_${metaEventName || 'event'}`;
         }
 
         // Create Custom Event trigger using matchRegex filter type
@@ -1826,16 +1865,16 @@ export async function deployMigrationWithExportImport(
             tm.accounts.containers.workspaces.triggers.create({
               parent: serverWorkspacePath,
               requestBody: {
-                name: `Trigger - ${eventName}`,
+                name: `Trigger - ${metaEventName}`,
                 type: 'customEvent',
                 customEventFilter: [{
                   type: 'matchRegex',
                   parameter: [
                     { type: 'template', key: 'arg0', value: '{{_event}}' },
-                    { type: 'template', key: 'arg1', value: `^${eventName}$` }
+                    { type: 'template', key: 'arg1', value: `^${metaEventName}$` }
                   ]
                 }],
-                notes: `Fires when ${eventName} event is received from GA4 client. Created by Ovalt.`
+                notes: `Fires when ${metaEventName} event is received from GA4 client. Created by Ovalt.`
               }
             })
           );
@@ -1844,12 +1883,12 @@ export async function deployMigrationWithExportImport(
 
           log.info({
             triggerId: metaTriggerId,
-            eventName
+            eventName: metaEventName
           }, 'Created Meta Pixel event trigger');
 
           await delay(2500);
         } catch (err: any) {
-          log.error({ eventName, err: err.message }, 'Failed to create Meta trigger, skipping this event');
+          log.error({ eventName: metaEventName, err: err.message }, 'Failed to create Meta trigger, skipping this event');
           continue;
         }
 
@@ -1869,7 +1908,7 @@ export async function deployMigrationWithExportImport(
                   }
                 ],
                 firingTriggerId: [metaTriggerId],
-                notes: `Server-side Meta Pixel tracking for ${clientTag.name}. Fires on ${eventName} event from GA4 client. Uses Event Data for matching. Created by Ovalt.`
+                notes: `Server-side Meta Pixel tracking for ${clientTag.name}. Fires on ${metaEventName} event from GA4 client. Uses Event Data for matching. Created by Ovalt.`
               }
             })
           );
@@ -1884,7 +1923,7 @@ export async function deployMigrationWithExportImport(
           log.info({
             tagId: metaPixelTag.data.tagId,
             tagName: clientTag.name,
-            eventName,
+            eventName: metaEventName,
             templateType: metaTemplateType
           }, 'Created Meta Pixel tag');
 

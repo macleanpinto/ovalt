@@ -137,12 +137,24 @@ export default function MigrationWorkspace() {
   const [metaAccessToken, setMetaAccessToken] = useState('');
 
   // Deployment rules state
-  const [deploymentRules, setDeploymentRules] = useState({
-    debugMode: false,
-    stagingFirst: true,
-    piiSanitization: true,
-    backupFirst: true
-  });
+// Clean up approved tags - remove any unsupported tags that were approved before the validation was added
+  useEffect(() => {
+    if (!report?.mappings) return;
+
+    const unsupportedApprovedTags = Array.from(approvedTags).filter(tagId => {
+      const mapping = report.mappings.find(m => m.clientTagId === tagId);
+      return mapping && !isTagTypeSupported(mapping.clientTagType);
+    });
+
+    if (unsupportedApprovedTags.length > 0) {
+      setApprovedTags(prev => {
+        const next = new Set(prev);
+        unsupportedApprovedTags.forEach(tagId => next.delete(tagId));
+        return next;
+      });
+      addLog(`⚠️ Removed ${unsupportedApprovedTags.length} unsupported tag(s) from approval list (Custom HTML/Image tags cannot be auto-deployed)`);
+    }
+  }, [report?.mappings]); // Run when mappings load
 
   // Helper to get GTM session
   const getGtmSession = () => {
@@ -227,12 +239,26 @@ export default function MigrationWorkspace() {
       'gaawc': 'sgtmgaaw',
       'awct': 'sgtmgads',
       'sp': 'sgtmgads',
+      'gclidw': 'sgtmadscl', // Conversion Linker
       'fls': 'sgtmflood',
       'flc': 'sgtmflood',
       'html': null, // Custom HTML can't be directly migrated
       'img': null, // Image tag typically can't migrate
     };
+
+    // Custom templates (Meta, TikTok, etc.) start with 'cvt_'
+    if (clientType && clientType.startsWith('cvt_')) {
+      return 'cvt'; // Custom variable template - can be migrated
+    }
+
     return mapping[clientType] || 'unknown';
+  };
+
+  // Check if tag type is supported for automatic migration
+  // Only block Custom HTML and Custom Image tags - everything else can be attempted
+  const isTagTypeSupported = (clientType: string): boolean => {
+    const serverType = getServerType(clientType);
+    return serverType !== null; // Only null means truly unsupported (html, img)
   };
 
   // Get human-readable label for server type (legacy / family)
@@ -241,8 +267,10 @@ export default function MigrationWorkspace() {
     const labels: Record<string, string> = {
       'sgtmgaaw': 'GA4 Events',
       'sgtmgads': 'Google Ads',
+      'sgtmadscl': 'Conversion Linker',
       'sgtmflood': 'Floodlight',
       'sgtmmeta': 'Meta Pixel',
+      'cvt': 'Custom Template',
       'unknown': 'Other Platforms'
     };
     return labels[serverType] || serverType;
@@ -251,6 +279,12 @@ export default function MigrationWorkspace() {
   /** Sidebar / headers: label by client GTM tag type id (e.g. gaawe, googtag). */
   const getClientTagTypeLabel = (clientTagType: string | null | undefined): string => {
     if (!clientTagType) return 'Unknown type';
+
+    // Handle custom templates (cvt_*)
+    if (clientTagType.startsWith('cvt_')) {
+      return 'Custom Template';
+    }
+
     const labels: Record<string, string> = {
       googtag: 'Google tag',
       gaawe: 'GA4 Event',
@@ -272,8 +306,10 @@ export default function MigrationWorkspace() {
     const icons: Record<string, string> = {
       'sgtmgaaw': 'analytics',
       'sgtmgads': 'ads_click',
+      'sgtmadscl': 'link',
       'sgtmflood': 'campaign',
       'sgtmmeta': 'share',
+      'cvt': 'extension',
       'unknown': 'category'
     };
     return icons[serverType] || 'sell';
@@ -285,8 +321,10 @@ export default function MigrationWorkspace() {
     const colors: Record<string, string> = {
       'sgtmgaaw': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
       'sgtmgads': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+      'sgtmadscl': 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
       'sgtmflood': 'bg-orange-500/20 text-orange-400 border-orange-500/30',
       'sgtmmeta': 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+      'cvt': 'bg-purple-500/20 text-purple-400 border-purple-500/30',
       'unknown': 'bg-green-500/20 text-green-400 border-green-500/30'
     };
     return colors[serverType] || 'bg-surface-variant/20 text-on-surface-variant border-surface-variant/30';
@@ -436,7 +474,9 @@ export default function MigrationWorkspace() {
   const pollingStateRef = useRef({
     isInitialLoad: true,
     previousStatus: '',
-    previousDeploymentStatus: ''
+    previousDeploymentStatus: '',
+    deploymentStartTime: null as number | null,
+    reportLoaded: false
   });
 
   useEffect(() => {
@@ -444,7 +484,9 @@ export default function MigrationWorkspace() {
     pollingStateRef.current = {
       isInitialLoad: true,
       previousStatus: '',
-      previousDeploymentStatus: ''
+      previousDeploymentStatus: '',
+      deploymentStartTime: null,
+      reportLoaded: false
     };
 
     let isCancelled = false;
@@ -482,6 +524,8 @@ export default function MigrationWorkspace() {
               setClientContainerPath(importData.gtm.containerPath);
               setClientWorkspacePath(importData.gtm.workspacePath);
               addLog(`✅ Client container: ${importData.gtm.containerPath}`);
+            } else {
+              addLog('⚠️ This import has no client GTM container linked. Deployment cannot modify the client workspace.');
             }
           } catch (err: any) {
             addLog(`⚠️ Could not load client container info: ${err.message}`);
@@ -501,13 +545,18 @@ export default function MigrationWorkspace() {
           }
         }
 
-        // Try to load report if available
-        if (runData.status === 'completed' || runData.status === 'needs_review') {
+        // Try to load report if available. The report is immutable once generated, so only
+        // fetch it once — avoids hammering /report on every 5s poll.
+        if (
+          (runData.status === 'completed' || runData.status === 'needs_review') &&
+          !pollingStateRef.current.reportLoaded
+        ) {
           try {
             const reportData = await apiClient.getRunReport(runId);
             if (isCancelled) return;
 
             setReport(reportData);
+            pollingStateRef.current.reportLoaded = true;
 
             // Only log on initial load
             if (pollingStateRef.current.isInitialLoad) {
@@ -558,12 +607,37 @@ export default function MigrationWorkspace() {
               addLog('✅ Deployment completed successfully');
               if ((runData as any).deploymentHistory && (runData as any).deploymentHistory.length > 0) {
                 const lastDep = (runData as any).deploymentHistory[(runData as any).deploymentHistory.length - 1];
+
+                // Show deployment summary
+                const approvedCount = lastDep.deployedTagIds?.length || 0;
+                if (approvedCount > 0) {
+                  addLog(`📊 ${approvedCount} tag${approvedCount > 1 ? 's' : ''} approved for deployment`);
+                }
                 if (lastDep.tagsModified) {
-                  addLog(`✅ ${lastDep.tagsModified} tags modified in client workspace`);
+                  addLog(`✅ ${lastDep.tagsModified} tag${lastDep.tagsModified > 1 ? 's' : ''} modified in client workspace`);
                 }
-                if (lastDep.deployed) {
-                  addLog(`✅ ${lastDep.deployed} server-side tags created`);
+
+                // Show server-side breakdown
+                if (lastDep.serverTags && lastDep.serverTags.length > 0) {
+                  const actualServerTags = lastDep.serverTags.filter((t: any) => !t.tagType?.includes('manual'));
+                  const manualTags = lastDep.serverTags.filter((t: any) => t.tagType?.includes('manual'));
+
+                  if (actualServerTags.length > 0) {
+                    addLog(`✅ ${actualServerTags.length} server-side tag${actualServerTags.length > 1 ? 's' : ''} created`);
+                    actualServerTags.forEach((tag: any) => {
+                      const clientCount = tag.handlesClientTags?.length || 0;
+                      addLog(`   • ${tag.tagName} (handles ${clientCount} client tag${clientCount > 1 ? 's' : ''})`);
+                    });
+                  }
+
+                  if (manualTags.length > 0) {
+                    manualTags.forEach((tag: any) => {
+                      const clientCount = tag.handlesClientTags?.length || 0;
+                      addLog(`⚠️  ${tag.tagName} (${clientCount} tag${clientCount > 1 ? 's' : ''} require manual setup)`);
+                    });
+                  }
                 }
+
                 if (lastDep.clientWorkspacePath) {
                   addLog(`📦 Client workspace: ${lastDep.clientWorkspaceName || 'Migration Workspace'}`);
                 }
@@ -573,17 +647,49 @@ export default function MigrationWorkspace() {
               }
             }
             setIsDeploying(false);
+            pollingStateRef.current.deploymentStartTime = null;
           } else if (currentDeploymentStatus === 'failed') {
             const errorMsg = (runData as any).deploymentError || 'Unknown error';
             if (pollingStateRef.current.previousDeploymentStatus === 'deploying') {
               addLog(`❌ Deployment failed: ${errorMsg}`);
+
+              // Check if error is due to expired OAuth tokens
+              const isOAuthError =
+                errorMsg.includes('Login Required') ||
+                errorMsg.includes('authentication credential') ||
+                errorMsg.includes('UNAUTHENTICATED') ||
+                errorMsg.includes('GTM OAuth session expired');
+
+              if (isOAuthError) {
+                setNeedsGtmReconnect(true);
+                addLog('🔑 GTM OAuth session expired. Click "Reconnect GTM" above to authenticate.');
+                alert.error('GTM OAuth session expired. Please reconnect to Google Tag Manager.');
+              }
             }
             setIsDeploying(false);
+            pollingStateRef.current.deploymentStartTime = null;
           } else if (currentDeploymentStatus === 'deploying' && pollingStateRef.current.previousDeploymentStatus !== 'deploying') {
             addLog('⏳ Deployment in progress...');
             setIsDeploying(true);
+            pollingStateRef.current.deploymentStartTime = Date.now();
           }
         }
+
+        // Check for idle/stuck deployments (timeout after 5 minutes)
+        if (currentDeploymentStatus === 'deploying' && pollingStateRef.current.deploymentStartTime) {
+          const elapsedMs = Date.now() - pollingStateRef.current.deploymentStartTime;
+          const timeoutMs = 5 * 60 * 1000; // 5 minutes
+
+          if (elapsedMs > timeoutMs) {
+            addLog('⚠️  Deployment taking longer than expected...');
+            addLog('🔑 GTM session may have expired. Click "Reconnect GTM" above to re-authenticate.');
+            setNeedsGtmReconnect(true);
+            setIsDeploying(false);
+            pollingStateRef.current.deploymentStartTime = null;
+            alert.warning('Deployment timeout - GTM session may have expired. Please reconnect and try again.');
+          }
+        }
+
         pollingStateRef.current.previousDeploymentStatus = currentDeploymentStatus;
 
         // Stop polling only when the migration run is in a terminal workflow state AND no deploy is running.
@@ -1039,6 +1145,27 @@ export default function MigrationWorkspace() {
             workspaceTab === 'deployment' ? 'pb-24 md:pb-20' : ''
           }`}
         >
+          {needsGtmReconnect && (
+            <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-50 max-w-2xl w-full mx-4">
+              <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl p-4 shadow-lg">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-orange-400 text-2xl">⚠️</span>
+                    <div>
+                      <p className="text-white font-semibold">GTM Session Expired</p>
+                      <p className="text-orange-300 text-sm">Reconnect to continue deploying</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleGtmReconnect}
+                    className="px-4 py-2 bg-[#41ffaf] text-[#003822] rounded-lg text-sm font-bold hover:opacity-90 transition-opacity whitespace-nowrap"
+                  >
+                    Reconnect GTM
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {workspaceTab === 'deployment' ? (
             <div className="flex-1 flex flex-col min-h-0 p-6 md:p-8 overflow-hidden">
               <div
@@ -1246,6 +1373,7 @@ export default function MigrationWorkspace() {
                   const isExpanded = expandedTags.has(m.clientTagId);
                   const detected = report?.detectedTags?.find((t) => t.id === m.clientTagId);
                   const status = detected?.status ?? 'ready';
+                  const isSupported = isTagTypeSupported(m.clientTagType);
                   const badge =
                     status === 'ready'
                       ? 'bg-green-500/10 text-green-400'
@@ -1263,39 +1391,52 @@ export default function MigrationWorkspace() {
                       }`}
                     >
                       <div className={`p-5 flex items-center justify-between ${isExpanded ? 'border-b border-white/5' : ''}`}>
-                        <div className="flex items-center gap-4">
-                          <div className="bg-[#41ffaf]/10 p-2 rounded-lg">
+                        <div className="flex items-center gap-4 flex-1 min-w-0">
+                          <div className="bg-[#41ffaf]/10 p-2 rounded-lg shrink-0">
                             <span className="material-symbols-outlined text-[#41ffaf]">
                               {getIconForTagType(m.clientTagType)}
                             </span>
                           </div>
-                          <div>
-                            <h3 className="font-semibold text-white">{m.clientTagName}</h3>
-                            <div className="flex items-center gap-3 mt-1">
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-semibold text-white truncate">{m.clientTagName}</h3>
+                            <div className="flex items-center gap-3 mt-1 flex-wrap">
                               <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${badge}`}>
                                 {status === 'needs_review' ? 'Needs Review' : 'Ready'}
                               </span>
-                              <span className="text-xs text-gray-500 font-mono">Trigger: {detected?.triggerSummary || '—'}</span>
+                              {!isSupported && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-500/10 text-red-400 border border-red-500/30">
+                                  Manual Setup Required
+                                </span>
+                              )}
+                              <span className="text-xs text-gray-500 font-mono truncate">Trigger: {detected?.triggerSummary || '—'}</span>
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-6 shrink-0">
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-gray-400 font-medium">Approved</span>
                             <button
                               onClick={() => {
+                                if (!isSupported) {
+                                  alert.warning('This tag type requires manual server-side setup. It cannot be automatically deployed.');
+                                  return;
+                                }
                                 const next = new Set(approvedTags);
                                 if (isApproved) next.delete(m.clientTagId);
                                 else next.add(m.clientTagId);
                                 setApprovedTags(next);
                               }}
+                              disabled={!isSupported}
                               className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                !isSupported ? 'bg-white/5 cursor-not-allowed opacity-40' :
                                 isApproved ? 'bg-[#41ffaf]' : 'bg-white/10'
                               }`}
+                              title={!isSupported ? 'Custom HTML tags cannot be automatically migrated' : ''}
                             >
                               <span
                                 className={`inline-block h-4 w-4 transform rounded-full transition ${
+                                  !isSupported ? 'translate-x-1 bg-gray-600' :
                                   isApproved ? 'translate-x-6 bg-[#003822]' : 'translate-x-1 bg-gray-500'
                                 }`}
                               />
@@ -1318,6 +1459,32 @@ export default function MigrationWorkspace() {
 
                       {isExpanded && (
                         <div className="p-6 bg-[#1c1b1b]">
+                          {!isSupported && (
+                            <div className="mb-6 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+                              <div className="flex items-start gap-3">
+                                <span className="material-symbols-outlined text-red-400 text-xl">warning</span>
+                                <div className="flex-1">
+                                  <h4 className="text-sm font-semibold text-red-400 mb-2">Manual Migration Required</h4>
+                                  <p className="text-xs text-red-300/90 leading-relaxed mb-3">
+                                    Custom HTML tags cannot be automatically migrated to server-side because they contain arbitrary code.
+                                    You need to manually create the equivalent server-side tag in your GTM server container.
+                                  </p>
+                                  {m.clientTagType === 'html' && m.clientTagName?.toLowerCase().includes('facebook') && (
+                                    <div className="bg-[#20201f] rounded-lg p-3 border border-white/5">
+                                      <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-2 font-bold">For Facebook Pixel:</p>
+                                      <ul className="text-xs text-gray-300 space-y-1 list-disc list-inside">
+                                        <li>In your server GTM container, add &quot;Facebook Conversions API&quot; tag from Gallery</li>
+                                        <li>Configure with your Pixel ID and Conversions API Access Token</li>
+                                        <li>Set trigger to &quot;All Events&quot;</li>
+                                        <li>Pause or remove this client-side HTML tag after testing</li>
+                                      </ul>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
                           <h4 className="text-[10px] uppercase tracking-widest text-gray-500 mb-4 font-bold">
                             Detailed Mapping
                           </h4>
@@ -1329,27 +1496,35 @@ export default function MigrationWorkspace() {
                               </div>
                               <div className="font-mono text-xs text-gray-300">Type: {m.clientTagType}</div>
                             </div>
-                            <div className="bg-[#20201f] p-4 rounded-lg border-l-2 border-[#41ffaf]">
+                            <div className={`bg-[#20201f] p-4 rounded-lg border-l-2 ${isSupported ? 'border-[#41ffaf]' : 'border-red-500/50'}`}>
                               <div className="flex justify-between items-center mb-2">
-                                <span className="text-[10px] font-mono text-[#41ffaf]">Server-Side</span>
-                                <span className="material-symbols-outlined text-xs text-[#41ffaf]">dns</span>
+                                <span className={`text-[10px] font-mono ${isSupported ? 'text-[#41ffaf]' : 'text-red-400'}`}>Server-Side</span>
+                                <span className={`material-symbols-outlined text-xs ${isSupported ? 'text-[#41ffaf]' : 'text-red-400'}`}>
+                                  {isSupported ? 'dns' : 'block'}
+                                </span>
                               </div>
                               <div className="font-mono text-xs text-gray-300">
-                                Recommendation: {m.serverRecommendation || '—'}
+                                {isSupported ? (
+                                  <>Recommendation: {m.serverRecommendation || '—'}</>
+                                ) : (
+                                  <span className="text-red-400">No automatic migration available</span>
+                                )}
                               </div>
                             </div>
                           </div>
-                          <div className="mt-6 flex justify-end gap-3">
-                            <button className="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 transition-all">
-                              Manual Edit
-                            </button>
-                            <button
-                              onClick={() => setApprovedTags((prev) => new Set(prev).add(m.clientTagId))}
-                              className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#41ffaf] text-[#003822]"
-                            >
-                              Approve Mapping
-                            </button>
-                          </div>
+                          {isSupported && (
+                            <div className="mt-6 flex justify-end gap-3">
+                              <button className="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 transition-all">
+                                Manual Edit
+                              </button>
+                              <button
+                                onClick={() => setApprovedTags((prev) => new Set(prev).add(m.clientTagId))}
+                                className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#41ffaf] text-[#003822]"
+                              >
+                                Approve Mapping
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1590,6 +1765,27 @@ export default function MigrationWorkspace() {
                           </option>
                         ))}
                       </select>
+
+                      {serverContainerPath && (
+                        <div className="space-y-1.5 pt-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[10px] uppercase tracking-wider text-[#bacbbe]">Server Container URL</label>
+                            <span className="text-[10px] text-[#bacbbe]/60">Editable — override if your tagging URL differs</span>
+                          </div>
+                          <input
+                            type="url"
+                            value={transport_url}
+                            onChange={(e) => settransport_url(e.target.value)}
+                            placeholder="https://sgtm.example.com"
+                            className="w-full bg-[#353535] border-none rounded-lg px-4 py-3 text-sm font-mono focus:ring-1 focus:ring-[#41ffaf]/40 transition-all"
+                          />
+                          {!transport_url && (
+                            <p className="text-[11px] text-orange-300/90">
+                              No tagging URL was detected on this container. Enter the server container URL before deploying.
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1712,51 +1908,6 @@ export default function MigrationWorkspace() {
                   );
                 })()}
 
-                {/* Deployment Rules */}
-                <section>
-                  <h3 className="text-sm text-[#bacbbe] mb-4 flex items-center gap-2">
-                    <span className="material-symbols-outlined text-xs">rule</span> Deployment Rules
-                  </h3>
-                  <div className="space-y-3">
-                    <label className="flex items-center gap-4 p-4 rounded-lg bg-[#1c1b1b] hover:bg-[#2a2a2a] transition-colors cursor-pointer border border-white/5">
-                      <input
-                        className="w-5 h-5 rounded bg-[#353535] text-[#41ffaf] focus:ring-offset-0 focus:ring-1 focus:ring-[#41ffaf]"
-                        type="checkbox"
-                        checked={deploymentRules.debugMode}
-                        onChange={(e) => setDeploymentRules((prev) => ({ ...prev, debugMode: e.target.checked }))}
-                      />
-                      <div className="flex-grow">
-                        <p className="text-sm font-medium">Enable Debug Mode</p>
-                        <p className="text-xs text-[#bacbbe]">Log detailed events for troubleshooting.</p>
-                      </div>
-                    </label>
-                    <label className="flex items-center gap-4 p-4 rounded-lg bg-[#1c1b1b] hover:bg-[#2a2a2a] transition-colors cursor-pointer border border-white/5">
-                      <input
-                        className="w-5 h-5 rounded bg-[#353535] text-[#41ffaf] focus:ring-offset-0 focus:ring-1 focus:ring-[#41ffaf]"
-                        type="checkbox"
-                        checked={deploymentRules.stagingFirst}
-                        onChange={(e) => setDeploymentRules((prev) => ({ ...prev, stagingFirst: e.target.checked }))}
-                      />
-                      <div className="flex-grow">
-                        <p className="text-sm font-medium">Publish to Staging First</p>
-                        <p className="text-xs text-[#bacbbe]">Test in a workspace before final production cutover.</p>
-                      </div>
-                    </label>
-                    <label className="flex items-center gap-4 p-4 rounded-lg bg-[#1c1b1b] hover:bg-[#2a2a2a] transition-colors cursor-pointer border border-white/5">
-                      <input
-                        className="w-5 h-5 rounded bg-[#353535] text-[#41ffaf] focus:ring-offset-0 focus:ring-1 focus:ring-[#41ffaf]"
-                        type="checkbox"
-                        checked={deploymentRules.piiSanitization}
-                        onChange={(e) => setDeploymentRules((prev) => ({ ...prev, piiSanitization: e.target.checked }))}
-                      />
-                      <div className="flex-grow">
-                        <p className="text-sm font-medium">Sanitize PII Data</p>
-                        <p className="text-xs text-[#bacbbe]">Scrub sensitive strings from logs.</p>
-                      </div>
-                    </label>
-                  </div>
-                </section>
-
                 {/* Footer action */}
                 <div className="mt-auto pt-6 flex flex-col gap-4 border-t border-white/5 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -1781,21 +1932,64 @@ export default function MigrationWorkspace() {
                         alert.warning('Please approve at least one tag before deploying');
                         return;
                       }
+
+                      // Filter out unsupported tags
+                      const supportedApprovedTags = Array.from(approvedTags).filter(tagId => {
+                        const mapping = tagMappings.find(m => m.clientTagId === tagId);
+                        return mapping && isTagTypeSupported(mapping.clientTagType);
+                      });
+
+                      const unsupportedCount = approvedTags.size - supportedApprovedTags.length;
+                      if (unsupportedCount > 0) {
+                        addLog(`⚠️ ${unsupportedCount} approved tag(s) cannot be automatically migrated (Custom HTML, Custom Image, etc.)`);
+                        addLog('These tags require manual server-side setup in your GTM container.');
+                      }
+
+                      if (supportedApprovedTags.length === 0) {
+                        alert.error('None of the approved tags can be automatically migrated. All selected tags require manual setup (Custom HTML, Custom Image, etc.).');
+                        return;
+                      }
+
                       if (!serverContainerPath) {
                         alert.warning('Select or create a server container first.');
                         return;
                       }
-                      if (!clientContainerPath || !clientWorkspacePath) {
-                        alert.error('Client container info not available. Please re-import your container.');
-                        return;
+
+                      // Resolve client container info lazily if it wasn't populated on initial load.
+                      let resolvedClientContainerPath = clientContainerPath;
+                      let resolvedClientWorkspacePath = clientWorkspacePath;
+                      if (!resolvedClientContainerPath || !resolvedClientWorkspacePath) {
+                        const importId = run?.importId;
+                        if (!importId) {
+                          alert.error('This migration has no linked import. Re-run the migration from an imported GTM container.');
+                          return;
+                        }
+                        try {
+                          const importData = await apiClient.getImport(importId);
+                          if (importData.gtm?.containerPath && importData.gtm?.workspacePath) {
+                            resolvedClientContainerPath = importData.gtm.containerPath;
+                            resolvedClientWorkspacePath = importData.gtm.workspacePath;
+                            setClientContainerPath(resolvedClientContainerPath);
+                            setClientWorkspacePath(resolvedClientWorkspacePath);
+                          } else {
+                            alert.error('The linked import has no GTM container path. Re-import the container from GTM to deploy.');
+                            return;
+                          }
+                        } catch (err: any) {
+                          alert.error(`Could not load client container info: ${err.message}`);
+                          return;
+                        }
                       }
                       // Close overlay first, then switch to deployment log (batched; layout effect scrolls log into view).
                       pendingScrollToDeploymentPanelRef.current = true;
                       setShowDeploymentModal(false);
                       setWorkspaceTab('deployment');
                       setIsDeploying(true);
-                      addLog(`🚀 Starting deployment of ${approvedTags.size} approved tag(s)...`);
-                      addLog(`📦 Client container: ${clientContainerPath}`);
+                      addLog(`🚀 Starting deployment of ${supportedApprovedTags.length} tag(s)...`);
+                      if (unsupportedCount > 0) {
+                        addLog(`⚠️ Skipping ${unsupportedCount} unsupported tag(s) that require manual setup`);
+                      }
+                      addLog(`📦 Client container: ${resolvedClientContainerPath}`);
                       addLog(`📦 Server container: ${serverContainerPath}`);
                       if (transport_url) addLog(`🌐 Server URL: ${transport_url}`);
                       try {
@@ -1810,11 +2004,12 @@ export default function MigrationWorkspace() {
                         if (metaAccessToken) {
                           addLog('🔑 Using provided Meta Access Token');
                         }
+
                         const result = await apiClient.deployApprovedTags(
                           runId,
-                          Array.from(approvedTags),
-                          clientContainerPath,
-                          clientWorkspacePath,
+                          supportedApprovedTags,
+                          resolvedClientContainerPath,
+                          resolvedClientWorkspacePath,
                           serverContainerPath,
                           transport_url,
                           gtmSessionId,
@@ -1847,8 +2042,9 @@ export default function MigrationWorkspace() {
                         setIsDeploying(false);
                       }
                     }}
-                    className="bg-[#41ffaf] text-[#003822] font-bold px-8 py-3.5 rounded-lg flex items-center gap-3 active:scale-95 transition-all"
-                    disabled={isDeploying}
+                    className="bg-[#41ffaf] text-[#003822] font-bold px-8 py-3.5 rounded-lg flex items-center gap-3 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+                    disabled={isDeploying || !serverContainerPath}
+                    title={!serverContainerPath ? 'Select or create a server container first' : undefined}
                   >
                     <span>Deploy Now</span>
                     <span className="material-symbols-outlined text-xl">rocket_launch</span>

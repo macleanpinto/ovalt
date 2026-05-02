@@ -1511,6 +1511,7 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     if (['gaawe', 'googtag', 'gaawc'].includes(tagType)) return 'ga4';
     if (['awct', 'sp'].includes(tagType)) return 'googads';
     if (tagType.startsWith('cvt_')) return 'meta'; // Custom Variable Template (Meta Pixel)
+    if (tagType === 'gclidw') return 'conversionlinker'; // Google Ads Conversion Linker
     return null;
   }
 

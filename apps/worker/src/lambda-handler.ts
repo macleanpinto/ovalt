@@ -1,12 +1,13 @@
 import type { SQSEvent, SQSRecord, Context } from "aws-lambda";
-import type { QueueMessage } from "./migration/types.js";
-import { ensureArtifactsBucket, processRun } from "./processor.js";
+import type { MigrationMessage, QueueMessage } from "./migration/types.js";
+import { ensureArtifactsBucket } from "./processor.js";
 
 /**
  * Lambda handler for processing SQS messages (migration worker).
  *
  * Triggered by SQS queue: tag-relay-migrations
  * Processes migration jobs from the queue.
+ * Routes to appropriate processor based on message type.
  *
  * NOTE: Does NOT import from index.ts to avoid dotenv dependency (Lambda doesn't need it).
  */
@@ -24,13 +25,27 @@ export async function handler(event: SQSEvent, context: Context): Promise<void> 
     try {
       const message = JSON.parse(record.body) as QueueMessage;
 
-      console.log(`Processing message`, {
-        messageId: record.messageId,
-        runId: message.runId,
-        importId: message.importId
-      });
+      // Route based on message type
+      if ('type' in message && message.type === 'deployment') {
+        console.log(`Processing deployment message`, {
+          messageId: record.messageId,
+          runId: message.runId,
+          type: message.type,
+          tagCount: message.deploymentConfig.approvedTagIds.length
+        });
 
-      await processRun(message);
+        const { processDeployment } = await import('./deployment-processor.js');
+        await processDeployment(message);
+      } else {
+        console.log(`Processing migration message`, {
+          messageId: record.messageId,
+          runId: message.runId,
+          importId: message.importId
+        });
+
+        const { processRun } = await import('./processor.js');
+        await processRun(message as MigrationMessage);
+      }
 
       console.log(`Message processed successfully`, {
         messageId: record.messageId,

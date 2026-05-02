@@ -190,3 +190,124 @@ if (tagName.includes('GA4') || tagName.includes('google analytics')) {
 Deploy, OAuth redirect URIs, and regions: **`README.md`**. Architecture: **`docs/system-design.md`**.
 
 **Runtime notes:** Lambda may reuse the Fastify instance; env changes need a new deploy or function update. Web OAuth flow uses cache-control on auth URLs; `/auth/callback` skips the initial auth check to avoid races.
+
+## AWS Deployment Requirements (MANDATORY)
+
+**CRITICAL**: When deploying to AWS, you MUST follow these requirements exactly. Do NOT deviate from these procedures.
+
+### Production AWS Configuration
+
+- **AWS Account**: 549116506406
+- **AWS Profile**: `tagrelay-prod` (ALWAYS use this profile)
+- **AWS Region**: `eu-north-1` (ALWAYS use this region, NOT us-east-1!)
+- **Domain**: ovalt.org
+
+### Deployment Commands (ALWAYS USE THESE)
+
+**Full Production Deployment:**
+```bash
+AWS_PROFILE=tagrelay-prod ./scripts/deploy-production.sh
+```
+
+**Quick Worker Lambda Update:**
+```bash
+./scripts/deploy-worker-only.sh
+# This script automatically uses AWS_PROFILE=tagrelay-prod and region=eu-north-1
+```
+
+**Quick API Lambda Update:**
+```bash
+./scripts/deploy-api-only.sh
+# This script automatically uses AWS_PROFILE=tagrelay-prod and region=eu-north-1
+```
+
+### Testing Requirements (MANDATORY BEFORE DEPLOYMENT)
+
+**CRITICAL**: Any changes to migration or deployment code (API or Worker) **MUST** be tested locally with E2E tests before deploying to production.
+
+**Testing Procedure:**
+1. Ensure LocalStack is running: `docker compose up -d`
+2. Start the worker: `npm run dev:worker` (in separate terminal or background)
+3. Run E2E deployment test: `cd apps/api && npm test src/e2e-gtm-deployment.test.ts`
+4. Verify changes in Ovalt GTM containers:
+   - Client container: accounts/6347965337/containers/248366882
+   - Server container: accounts/6347965337/containers/248342708
+5. Check created workspaces and tags match expected behavior
+6. **ONLY deploy if E2E tests pass and GTM containers show correct changes**
+
+**What to Verify in GTM Containers:**
+- Client-side tags modified/paused correctly
+- Server-side tags created with correct types
+- Triggers created properly
+- Variables copied to server workspace
+- No unexpected tags or modifications
+
+**Files Requiring E2E Testing Before Deployment:**
+- `apps/api/src/gtm-migration-deploy.ts` (main deployment logic)
+- `apps/api/src/server.ts` (deployment endpoints)
+- `apps/worker/src/deployment-processor.ts` (worker deployment handler)
+- `apps/worker/src/migration/pipeline.ts` (migration logic)
+
+**Never skip testing for "small changes"** - even one-line changes to deployment logic can break production deployments.
+
+### Deployment Rules (MUST FOLLOW)
+
+1. **ALWAYS verify account and region BEFORE deploying:**
+   ```bash
+   AWS_PROFILE=tagrelay-prod aws sts get-caller-identity
+   # Expected Account: 549116506406
+   ```
+
+2. **NEVER deploy manually with AWS CLI commands** unless explicitly instructed by the user to do so. ALWAYS use the deployment scripts in `scripts/` directory.
+
+3. **NEVER deploy to us-east-1**. Production is in **eu-north-1**.
+
+4. **NEVER deploy to AWS account 851725425279**. That is the wrong account.
+
+5. **ALWAYS use AWS_PROFILE=tagrelay-prod** for all AWS operations.
+
+6. **Build Lambda bundles BEFORE deploying:**
+   ```bash
+   # For Worker
+   cd apps/worker && npm run build:lambda
+   
+   # For API
+   cd apps/api && npm run build:lambda
+   ```
+
+7. **If user asks to "deploy" without specifying what**, ask which component:
+   - Full deployment (all stacks)
+   - Worker Lambda only
+   - API Lambda only
+   - Web app only
+
+8. **After deployment, ALWAYS verify:**
+   ```bash
+   # Check Worker Lambda
+   AWS_PROFILE=tagrelay-prod aws lambda get-function \
+     --function-name tag-relay-worker-production \
+     --region eu-north-1 \
+     --query 'Configuration.[LastModified, Handler, Timeout]'
+   
+   # Check logs
+   AWS_PROFILE=tagrelay-prod aws logs tail \
+     /aws/lambda/tag-relay-worker-production \
+     --region eu-north-1 \
+     --since 5m
+   ```
+
+### What NOT to Do
+
+❌ **NEVER** run individual `aws lambda update-function-code` commands unless using the deployment scripts
+❌ **NEVER** assume us-east-1 is the production region
+❌ **NEVER** deploy without verifying the AWS account first
+❌ **NEVER** skip using the deployment scripts (they have important build steps)
+❌ **NEVER** deploy to multiple regions (production is ONLY in eu-north-1)
+
+### When to Deviate
+
+You may ONLY deviate from these deployment requirements if:
+1. The user explicitly instructs you to deploy to a different account/region, OR
+2. The user explicitly instructs you to use manual AWS CLI commands
+
+In all other cases, ALWAYS use the deployment scripts with the correct profile and region.

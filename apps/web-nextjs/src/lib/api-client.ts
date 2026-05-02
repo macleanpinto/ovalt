@@ -266,9 +266,11 @@ class APIClient {
   }
 
   async createRun(importId: string): Promise<Run> {
+    // Generate unique idempotency key to allow multiple migrations from same import
+    const idempotencyKey = `${importId}:${Date.now()}`;
     return this.request(`/migrations/${importId}/run`, {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ idempotencyKey }),
     });
   }
 
@@ -332,7 +334,22 @@ class APIClient {
     gtmSessionId: string,
     metaAccessToken?: string
   ): Promise<any> {
-    return this.request(`/migrations/${runId}/deploy-approved-v2`, {
+    const endpoint = `/migrations/${runId}/deploy-approved-v2`;
+    const fullUrl = `${API_URL}${endpoint}`;
+
+    console.log('🌐 API CLIENT: Making deployment request');
+    console.log('📍 Full URL:', fullUrl);
+    console.log('📋 Endpoint:', endpoint);
+    console.log('📦 Request body:', {
+      approvedTagIds,
+      clientContainerPath,
+      clientWorkspacePath,
+      serverContainerPath,
+      transport_url,
+      hasMetaAccessToken: !!metaAccessToken
+    });
+
+    return this.request(endpoint, {
       method: 'POST',
       headers: { 'x-gtm-session': gtmSessionId },
       body: JSON.stringify({

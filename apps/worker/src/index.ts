@@ -10,7 +10,7 @@ loadDotenv({ path: resolve(__repoRoot, ".env.local"), override: true });
 // Now safe to import modules that depend on process.env
 import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { z } from "zod";
-import type { QueueMessage } from "./migration/types.js";
+import type { MigrationMessage, QueueMessage } from "./migration/types.js";
 import { ensureArtifactsBucket, processRun } from "./processor.js";
 
 const env = z
@@ -39,7 +39,7 @@ export async function processMessage(message: QueueMessage): Promise<void> {
     await processDeployment(message);
   } else {
     // Handle migration message (default for backwards compatibility)
-    await processRun(message);
+    await processRun(message as MigrationMessage);
   }
 }
 

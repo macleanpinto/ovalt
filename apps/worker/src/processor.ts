@@ -6,7 +6,7 @@ import { CreateBucketCommand, HeadBucketCommand, S3Client } from "@aws-sdk/clien
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { z } from "zod";
-import type { QueueMessage } from "./migration/types.js";
+import type { MigrationMessage } from "./migration/types.js";
 import { runMigrationPipeline } from "./migration/pipeline.js";
 
 // Lazy initialization to ensure environment variables are loaded first (by index.ts)
@@ -79,7 +79,7 @@ function initClients() {
   ddb = DynamoDBDocumentClient.from(new DynamoDBClient(awsConfig));
 }
 
-export async function processRun(msg: QueueMessage): Promise<void> {
+export async function processRun(msg: MigrationMessage): Promise<void> {
   initClients(); // Ensure clients are initialized
   const now = new Date().toISOString();
   await ddb.send(

@@ -116,12 +116,13 @@ export class TagRelayApiStack extends cdk.Stack {
         DDB_TABLE_RUNS: props.runsTable.tableName,
         DDB_TABLE_SESSIONS: props.sessionsTable.tableName,
         S3_BUCKET: props.artifactsBucket.bucketName,
+        GTM_OAUTH_REDIRECT_URI: environment === 'production' ? 'https://api.ovalt.org/gtm/oauth/callback' : 'http://localhost:3001/gtm/oauth/callback',
       },
     });
 
     // Grant permissions
     props.importsTable.grantReadWriteData(this.workerFunction);
-    props.sessionsTable.grantReadData(this.workerFunction); // For GTM OAuth tokens
+    props.sessionsTable.grantReadWriteData(this.workerFunction); // For GTM OAuth tokens (read + refresh)
     props.runsTable.grantReadWriteData(this.workerFunction);
     props.artifactsBucket.grantReadWrite(this.workerFunction);
     props.migrationQueue.grantConsumeMessages(this.workerFunction);

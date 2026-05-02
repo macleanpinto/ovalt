@@ -10,16 +10,24 @@ export default function Home() {
   return (
     <div className="bg-[#131313] text-[#e5e2e1] min-h-screen">
       {/* TopNavBar */}
-      <nav className="fixed top-0 w-full z-50 bg-[#131313]/80 backdrop-blur-xl">
-        <div className="flex justify-between items-center px-8 py-4 max-w-[1440px] mx-auto">
+      <nav className="fixed top-0 z-50 w-full border-b border-white/[0.06] bg-[#131313]/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center gap-2.5">
             <BrandLogo priority />
           </Link>
-          <div className="hidden md:flex items-center gap-10">
-            <a className="text-[#41ffaf] font-semibold label-font transition-colors duration-300" href="#product">Product</a>
-            <a className="text-white/70 label-font hover:text-white transition-colors duration-300" href="#features">Features</a>
-            <a className="text-white/70 label-font hover:text-white transition-colors duration-300" href="#pricing">Pricing</a>
-            <Link href="/dashboard" className="text-white/70 label-font hover:text-white transition-colors duration-300">Dashboard</Link>
+          <div className="hidden items-center gap-8 md:flex">
+            <a className="text-sm font-medium text-[#41ffaf]" href="#product">
+              Product
+            </a>
+            <a className="text-sm font-medium text-zinc-400 transition-colors hover:text-white" href="#features">
+              Features
+            </a>
+            <Link href="/pricing" className="text-sm font-medium text-zinc-400 transition-colors hover:text-white">
+              Pricing
+            </Link>
+            <Link href="/dashboard" className="text-sm font-medium text-zinc-400 transition-colors hover:text-white">
+              Dashboard
+            </Link>
           </div>
           <div className="flex items-center gap-6">
             {isLoading ? (
@@ -28,11 +36,14 @@ export default function Home() {
               <UserMenu />
             ) : (
               <>
-                <Link href="/auth/login" className="text-white/70 text-sm label-font hover:text-white transition-colors duration-300">
-                  Sign In
+                <Link href="/auth/login" className="text-sm font-medium text-zinc-400 transition-colors hover:text-white">
+                  Sign in
                 </Link>
-                <Link href="/auth/register" className="bg-[#41ffaf] text-[#003822] px-6 py-2.5 rounded-xl font-semibold label-font hover:opacity-90 transition-all">
-                  Get Started
+                <Link
+                  href="/auth/register"
+                  className="rounded-full bg-[#41ffaf] px-5 py-2.5 text-sm font-semibold text-[#003822] transition-opacity hover:opacity-90"
+                >
+                  Get started
                 </Link>
               </>
             )}
@@ -40,28 +51,36 @@ export default function Home() {
         </div>
       </nav>
 
-      <main className="pt-32">
+      <main className="pt-28 md:pt-32">
         {/* Hero Section */}
-        <section className="max-w-[1440px] mx-auto px-8 mb-40">
+        <section className="mx-auto mb-28 max-w-7xl px-5 sm:px-6 lg:mb-40 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-16 items-center">
             <div className="lg:col-span-7">
               <div className="inline-flex items-center gap-2 mb-6 px-3 py-1 bg-[#20201f] rounded-full border border-[#5d3f3a]/15">
                 <span className="w-2 h-2 rounded-full bg-[#5fde8f]"></span>
                 <span className="label-font text-[10px] uppercase tracking-widest text-[#5fde8f]">Production Ready</span>
               </div>
-              <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight headline-font leading-[1.05] text-white mb-8">
-                Move your GTM to the <span className="text-[#41ffaf]">Server</span> without a Developer.
+              <h1 className="mb-8 text-5xl font-semibold tracking-tight headline-font text-white md:text-7xl md:leading-[1.05]">
+                Move your GTM to the <span className="text-[#41ffaf]">server</span>
+                <span className="text-zinc-500"> — </span>without a developer.
               </h1>
-              <p className="text-lg md:text-xl text-[#bacbbe] max-w-xl leading-relaxed mb-10">
-                Convert client-side containers into enterprise-grade server-side infrastructure in minutes. Privacy-first tracking, zero code required.
+              <p className="mb-10 max-w-xl text-lg leading-relaxed text-zinc-400 md:text-xl">
+                Convert client-side containers into enterprise-grade server-side infrastructure in minutes. Privacy-first
+                tracking, minimal engineering lift.
               </p>
-              <div className="flex flex-col sm:flex-row gap-4">
-                <Link href="/dashboard" className="bg-[#41ffaf] text-[#003822] px-8 py-4 rounded-xl font-bold text-lg hover:opacity-90 transition-all flex items-center justify-center gap-2">
-                  Import your Container
-                  <span className="material-symbols-outlined">arrow_forward</span>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <Link
+                  href="/dashboard"
+                  className="inline-flex items-center justify-center gap-2 rounded-full bg-[#41ffaf] px-8 py-4 text-base font-semibold text-[#003822] transition-opacity hover:opacity-90"
+                >
+                  Import your container
+                  <span className="material-symbols-outlined text-xl">arrow_forward</span>
                 </Link>
-                <Link href="#demo" className="bg-[#353535] text-white px-8 py-4 rounded-xl font-semibold text-lg hover:bg-[#2a2a2a] transition-all">
-                  View Live Demo
+                <Link
+                  href="#demo"
+                  className="inline-flex items-center justify-center rounded-full border border-white/15 px-8 py-4 text-base font-semibold text-white transition-colors hover:bg-white/5"
+                >
+                  View live demo
                 </Link>
               </div>
             </div>
@@ -92,15 +111,32 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Trust strip — Ramp-style social proof band */}
+        <section className="border-y border-white/[0.06] bg-white/[0.02] py-10">
+          <div className="mx-auto max-w-7xl px-5 sm:px-6 lg:px-8">
+            <p className="mb-6 text-center text-[11px] font-semibold uppercase tracking-[0.25em] text-zinc-500">
+              Built for modern analytics &amp; growth teams
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-x-12 gap-y-6 text-sm font-medium text-zinc-600">
+              <span>Google Tag Manager</span>
+              <span>GA4</span>
+              <span>Server-side tagging</span>
+              <span>AWS</span>
+              <span>Privacy-first defaults</span>
+            </div>
+          </div>
+        </section>
+
         {/* Migration Workspace Showcase */}
-        <section id="product" className="bg-[#1c1b1b] py-32 px-8 overflow-hidden">
-          <div className="max-w-[1440px] mx-auto">
-            <div className="text-center mb-20">
-              <h2 className="text-3xl md:text-5xl font-bold headline-font mb-6 text-white">Migration Workspace</h2>
-              <p className="label-font text-sm uppercase tracking-widest text-[#bacbbe]">Precision Engineering for your Data</p>
+        <section id="product" className="overflow-hidden bg-[#1c1b1b] px-5 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <div className="mx-auto max-w-7xl">
+            <div className="mb-16 text-center md:mb-20">
+              <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#41ffaf]/90">Product</p>
+              <h2 className="mb-4 text-3xl font-semibold tracking-tight text-white md:text-5xl">Migration workspace</h2>
+              <p className="text-sm uppercase tracking-widest text-zinc-500">Precision mapping for your container</p>
             </div>
             <div className="relative max-w-5xl mx-auto">
-              <div className="bg-[#131313] border border-white/10 rounded-2xl p-2 shadow-2xl overflow-hidden">
+              <div className="overflow-hidden rounded-3xl border border-white/[0.08] bg-[#131313] p-2 shadow-2xl">
                 <div className="bg-[#1c1b1b] p-4 border-b border-[#5d3f3a]/10 flex items-center justify-between">
                   <div className="flex gap-1.5">
                     <div className="w-2.5 h-2.5 rounded-full bg-[#ffb4ab]/40"></div>
@@ -169,25 +205,29 @@ export default function Home() {
         </section>
 
         {/* Features Grid */}
-        <section id="features" className="py-32 max-w-[1440px] mx-auto px-8">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="p-10 rounded-2xl bg-[#20201f] hover:bg-[#2a2a2a] transition-colors group">
-              <div className="w-14 h-14 rounded-xl bg-[#353535] flex items-center justify-center mb-8 border border-white/10 group-hover:border-[#41ffaf]/30 transition-colors">
-                <span className="material-symbols-outlined text-[#41ffaf] text-3xl">analytics</span>
+        <section id="features" className="mx-auto max-w-7xl px-5 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <p className="mb-4 text-center text-[11px] font-semibold uppercase tracking-[0.22em] text-[#41ffaf]/90">Platform</p>
+          <h2 className="mb-14 text-center text-3xl font-semibold tracking-tight text-white md:text-4xl">
+            Everything you need to ship server-side tags
+          </h2>
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-3 md:gap-6">
+            <div className="group rounded-3xl border border-white/[0.08] bg-[#20201f] p-10 transition-colors hover:bg-[#252524]">
+              <div className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-[#353535] transition-colors group-hover:border-[#41ffaf]/30">
+                <span className="material-symbols-outlined text-3xl text-[#41ffaf]">analytics</span>
               </div>
               <h3 className="text-2xl font-bold headline-font mb-4 text-white">Automatic Readiness Report</h3>
               <p className="text-[#bacbbe] leading-relaxed">Instantly identify which tags are compatible and which need adjustment before moving to the server.</p>
             </div>
-            <div className="p-10 rounded-2xl bg-[#20201f] hover:bg-[#2a2a2a] transition-colors group">
-              <div className="w-14 h-14 rounded-xl bg-[#353535] flex items-center justify-center mb-8 border border-white/10 group-hover:border-[#41ffaf]/30 transition-colors">
-                <span className="material-symbols-outlined text-[#41ffaf] text-3xl">build</span>
+            <div className="group rounded-3xl border border-white/[0.08] bg-[#20201f] p-10 transition-colors hover:bg-[#252524]">
+              <div className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-[#353535] transition-colors group-hover:border-[#41ffaf]/30">
+                <span className="material-symbols-outlined text-3xl text-[#41ffaf]">build</span>
               </div>
               <h3 className="text-2xl font-bold headline-font mb-4 text-white">Rule-Based Migration</h3>
               <p className="text-[#bacbbe] leading-relaxed">30+ production rules automatically convert your tags with confidence scoring and validation.</p>
             </div>
-            <div className="p-10 rounded-2xl bg-[#20201f] hover:bg-[#2a2a2a] transition-colors group">
-              <div className="w-14 h-14 rounded-xl bg-[#353535] flex items-center justify-center mb-8 border border-white/10 group-hover:border-white/30 transition-colors">
-                <span className="material-symbols-outlined text-white text-3xl">lock</span>
+            <div className="group rounded-3xl border border-white/[0.08] bg-[#20201f] p-10 transition-colors hover:bg-[#252524]">
+              <div className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-[#353535] transition-colors group-hover:border-white/25">
+                <span className="material-symbols-outlined text-3xl text-white">lock</span>
               </div>
               <h3 className="text-2xl font-bold headline-font mb-4 text-white">Privacy-First</h3>
               <p className="text-[#bacbbe] leading-relaxed">GDPR/CCPA compliant with consent mode support. Own your first-party data infrastructure.</p>
@@ -195,18 +235,24 @@ export default function Home() {
           </div>
         </section>
 
-        {/* CTA / Pricing Section */}
-        <section id="pricing" className="py-32 px-8 mb-20">
-          <div className="max-w-5xl mx-auto rounded-[2rem] bg-gradient-to-br from-[#20201f] to-[#1c1b1b] border border-white/10 p-12 md:p-20 text-center relative overflow-hidden">
+        {/* CTA Section */}
+        <section className="mb-20 px-5 py-24 sm:px-6 lg:px-8 lg:py-32">
+          <div className="relative mx-auto max-w-5xl overflow-hidden rounded-[2rem] border border-white/[0.08] bg-gradient-to-br from-[#20201f] to-[#1c1b1b] p-12 text-center md:p-20">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(65,255,175,0.05),transparent)] pointer-events-none"></div>
             <h2 className="text-4xl md:text-6xl font-extrabold headline-font mb-6 relative z-10 text-white">Start your migration today.</h2>
             <p className="text-xl text-[#bacbbe] mb-12 max-w-2xl mx-auto relative z-10">Production-ready serverless architecture. Deploy to AWS in 15 minutes.</p>
-            <div className="flex flex-col sm:flex-row gap-6 justify-center relative z-10">
-              <Link href="/auth/register" className="bg-[#41ffaf] text-[#003822] px-12 py-5 rounded-xl font-bold text-xl hover:opacity-90 transition-all active:scale-95">
-                Get Started for Free
+            <div className="relative z-10 flex flex-col justify-center gap-4 sm:flex-row sm:gap-5">
+              <Link
+                href="/auth/register"
+                className="rounded-full bg-[#41ffaf] px-10 py-5 text-lg font-semibold text-[#003822] transition-opacity hover:opacity-90 active:scale-[0.99]"
+              >
+                Get started free
               </Link>
-              <Link href="/dashboard" className="border border-white/10 px-12 py-5 rounded-xl font-bold text-xl hover:bg-white/5 transition-all text-white active:scale-95">
-                View Dashboard
+              <Link
+                href="/dashboard"
+                className="rounded-full border border-white/15 px-10 py-5 text-lg font-semibold text-white transition-colors hover:bg-white/5 active:scale-[0.99]"
+              >
+                View dashboard
               </Link>
             </div>
             <div className="mt-16 flex items-center justify-center gap-12 opacity-40 text-sm">
@@ -219,8 +265,8 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-[#0e0e0e] w-full py-16 px-8">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-12 max-w-[1440px] mx-auto">
+      <footer className="w-full bg-[#0e0e0e] px-5 py-16 sm:px-6 lg:px-8">
+        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-12 md:grid-cols-4">
           <div className="col-span-2 md:col-span-1">
             <div className="text-lg font-bold text-white mb-6">Ovalt</div>
             <p className="text-white/40 text-sm leading-relaxed max-w-xs">
@@ -255,9 +301,9 @@ export default function Home() {
             </nav>
           </div>
         </div>
-        <div className="max-w-[1440px] mx-auto mt-16 pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between items-center gap-6">
+        <div className="mx-auto mt-16 flex max-w-7xl flex-col items-center justify-between gap-6 border-t border-white/5 pt-8 md:flex-row">
           <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-8">
-            <p className="text-white/20 text-xs uppercase tracking-widest">© 2024 Ovalt. All rights reserved.</p>
+            <p className="text-xs uppercase tracking-widest text-white/20">© {new Date().getFullYear()} Ovalt. All rights reserved.</p>
             <div className="flex items-center gap-6 label-font text-xs">
               <Link href="/privacy" className="text-white/35 hover:text-[#41ffaf] transition-colors">
                 Privacy

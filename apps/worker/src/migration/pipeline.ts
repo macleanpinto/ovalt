@@ -8,7 +8,7 @@ import { buildMigrationReport } from "./buildReport.js";
 import { reportToMarkdown } from "./markdown.js";
 import { loadImportPayload } from "./loadImport.js";
 import { verifyContainerProvisioning, type ProvisioningContext } from "../provisioning/index.js";
-import type { QueueMessage } from "./types.js";
+import type { MigrationMessage } from "./types.js";
 
 export type PipelineResult = { ok: true } | { ok: false; message: string };
 
@@ -47,7 +47,7 @@ async function writeArtifacts(
 }
 
 export async function runMigrationPipeline(opts: {
-  msg: QueueMessage;
+  msg: MigrationMessage;
   ddb: DynamoDBDocumentClient;
   s3: S3Client;
   tableImports: string;

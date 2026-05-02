@@ -1,10 +1,12 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import type { DeploymentMessage } from './migration/types.js';
 import { z } from 'zod';
-import { OAuth2Client } from 'google-auth-library';
+import { google } from 'googleapis';
+import type { FastifyBaseLogger } from 'fastify';
 
-// Import deployment logic from API (esbuild will bundle it)
+// Import deployment logic from API (esbuild bundles it for Lambda).
 import { deployMigrationWithExportImport } from '../../api/src/gtm-migration-deploy.js';
 
 const env = z
@@ -13,11 +15,46 @@ const env = z
     AWS_ENDPOINT: z.string().optional(),
     DDB_TABLE_RUNS: z.string(),
     DDB_TABLE_SESSIONS: z.string(),
+    ENVIRONMENT: z.string().default('local'),
+    GTM_OAUTH_CLIENT_ID: z.string().optional(),
+    GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+    GTM_OAUTH_CLIENT_SECRET: z.string().optional(),
+    GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+    GTM_OAUTH_REDIRECT_URI: z.string().optional(),
   })
   .parse(process.env);
 
 const ddb = new DynamoDBClient({ region: env.AWS_REGION, endpoint: env.AWS_ENDPOINT });
 const ddbDoc = DynamoDBDocumentClient.from(ddb);
+const secretsClient = new SecretsManagerClient({ region: env.AWS_REGION, endpoint: env.AWS_ENDPOINT });
+
+// Cache for secrets loaded from Secrets Manager
+let secretsCache: Record<string, string> | null = null;
+
+async function loadSecretsIfNeeded() {
+  if (secretsCache) return secretsCache;
+
+  // Try to load from Secrets Manager if not in env
+  if (!env.GTM_OAUTH_CLIENT_ID && !env.GOOGLE_OAUTH_CLIENT_ID) {
+    try {
+      const secretName = `tag-relay/${env.ENVIRONMENT}/app-secrets`;
+      const response = await secretsClient.send(
+        new GetSecretValueCommand({ SecretId: secretName })
+      );
+      const secrets = JSON.parse(response.SecretString || '{}');
+      secretsCache = secrets;
+      return secrets;
+    } catch (err) {
+      console.warn('Failed to load secrets from Secrets Manager:', err);
+      secretsCache = {};
+      return {};
+    }
+  }
+
+  // Secrets already in environment
+  secretsCache = {};
+  return secretsCache;
+}
 
 // Simple logger for worker
 const logger = {
@@ -47,14 +84,86 @@ export async function processDeployment(message: DeploymentMessage): Promise<voi
       throw new Error('GTM session not found or expired');
     }
 
-    // Create OAuth2Client from stored tokens
+    // Load secrets from Secrets Manager if needed
+    const secrets = await loadSecretsIfNeeded();
+
+    // Create OAuth2Client with credentials for token refresh
+    const clientId = env.GTM_OAUTH_CLIENT_ID || env.GOOGLE_OAUTH_CLIENT_ID || secrets.GTM_OAUTH_CLIENT_ID || secrets.GOOGLE_OAUTH_CLIENT_ID;
+    const clientSecret = env.GTM_OAUTH_CLIENT_SECRET || env.GOOGLE_OAUTH_CLIENT_SECRET || secrets.GTM_OAUTH_CLIENT_SECRET || secrets.GOOGLE_OAUTH_CLIENT_SECRET;
+    const redirectUri = env.GTM_OAUTH_REDIRECT_URI || secrets.GTM_OAUTH_REDIRECT_URI;
+
+    logger.info({
+      runId,
+      hasClientId: !!clientId,
+      hasClientSecret: !!clientSecret,
+      hasRedirectUri: !!redirectUri,
+      clientIdPrefix: clientId ? clientId.substring(0, 20) + '...' : 'missing',
+      redirectUri: redirectUri || 'missing'
+    }, 'OAuth client credentials check');
+
+    if (!clientId || !clientSecret) {
+      throw new Error('GTM OAuth credentials not configured. Set GTM_OAUTH_CLIENT_ID/SECRET in Secrets Manager or environment');
+    }
+
+    const auth = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     const tokens = sessionResult.Item.tokens;
-    const auth = new OAuth2Client();
     auth.setCredentials({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry_date: tokens.expiry_date,
+      access_token: tokens.access_token ?? undefined,
+      refresh_token: tokens.refresh_token ?? undefined,
+      expiry_date: tokens.expiry_date ?? undefined,
+      scope: tokens.scope ?? undefined,
+      token_type: tokens.token_type ?? undefined,
+      id_token: tokens.id_token ?? undefined,
     });
+
+    // Check token validity and credentials
+    logger.info({
+      runId,
+      tokenExpiry: tokens.expiry_date,
+      expiresIn: tokens.expiry_date ? Math.round((tokens.expiry_date - Date.now()) / 1000 / 60) + ' minutes' : 'unknown',
+      hasAccessToken: !!tokens.access_token,
+      hasRefreshToken: !!tokens.refresh_token,
+      hasClientCredentials: !!(clientId && clientSecret)
+    }, 'Using GTM OAuth tokens');
+
+    // Trigger refresh if tokens are expired or about to expire (within 5 minutes)
+    const now = Date.now();
+    if (tokens.expiry_date && tokens.expiry_date < now + 300000) {
+      logger.info({ runId }, 'Tokens expired or expiring soon, refreshing...');
+      try {
+        const refreshedTokens = await auth.refreshAccessToken();
+
+        logger.info({
+          runId,
+          refreshedHasAccessToken: !!refreshedTokens.credentials.access_token,
+          refreshedHasRefreshToken: !!refreshedTokens.credentials.refresh_token,
+          refreshedExpiry: refreshedTokens.credentials.expiry_date
+        }, 'Token refresh response');
+
+        auth.setCredentials(refreshedTokens.credentials);
+
+        // Update session with refreshed tokens
+        await ddbDoc.send(
+          new UpdateCommand({
+            TableName: env.DDB_TABLE_SESSIONS,
+            Key: { sessionId: gtmSessionId },
+            UpdateExpression: 'SET tokens = :tokens, updatedAt = :updated',
+            ExpressionAttributeValues: {
+              ':tokens': refreshedTokens.credentials,
+              ':updated': new Date().toISOString()
+            }
+          })
+        );
+        logger.info({ runId }, 'Tokens refreshed and saved successfully');
+      } catch (refreshErr) {
+        logger.error({
+          err: refreshErr,
+          runId,
+          errorDetails: refreshErr instanceof Error ? refreshErr.message : String(refreshErr)
+        }, 'Failed to refresh tokens');
+        throw new Error('GTM OAuth session expired. Please re-authenticate via /gtm/oauth');
+      }
+    }
 
     // Convert tagsByCategory back to Map
     const tagsByCategory = new Map(Object.entries(deploymentConfig.tagsByCategory));
@@ -71,7 +180,7 @@ export async function processDeployment(message: DeploymentMessage): Promise<voi
         tagsByType: tagsByCategory,
         metaAccessToken: deploymentConfig.metaAccessToken
       },
-      logger
+      logger as FastifyBaseLogger
     );
 
     // Save successful deployment to DynamoDB
