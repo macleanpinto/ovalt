@@ -32,11 +32,22 @@ export async function authenticateRequest(
   config: AuthMiddlewareConfig
 ): Promise<void> {
   const path = request.url.split("?")[0] || request.url;
+  const method = request.method.toUpperCase();
 
-  // Check if path is public
-  const isPublicPath = config.publicPaths?.some(p => {
-    if (p.endsWith("*")) {
-      return path.startsWith(p.slice(0, -1));
+  // Check if path is public. Entries may be:
+  //   "/foo"           — matches /foo on any method
+  //   "/foo/*"         — matches any path under /foo on any method
+  //   "GET:/foo/:x"    — matches GET /foo/<anything-not-containing-slash>
+  //   "GET:/foo/*"     — matches GET on any path under /foo
+  const isPublicPath = config.publicPaths?.some(entry => {
+    const [methodPart, pathPart] = entry.includes(":/") ? entry.split(/:(.+)/) as [string, string] : [null, entry];
+    if (methodPart && methodPart.toUpperCase() !== method) return false;
+    const p = pathPart!;
+    if (p.endsWith("*")) return path.startsWith(p.slice(0, -1));
+    if (p.includes("/:")) {
+      // Treat `/:param` as a single URL segment (no slashes).
+      const regex = new RegExp("^" + p.replace(/\/:[^/]+/g, "/[^/]+") + "$");
+      return regex.test(path);
     }
     return path === p;
   });

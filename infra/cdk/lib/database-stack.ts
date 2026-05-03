@@ -17,6 +17,7 @@ export class TagRelayDatabaseStack extends cdk.Stack {
   public readonly sessionsTable: dynamodb.Table;
   public readonly apiKeysTable: dynamodb.Table;
   public readonly oauthAccountsTable: dynamodb.Table;
+  public readonly invitesTable: dynamodb.Table;
   public readonly artifactsBucket: s3.Bucket;
   public readonly webAssetsBucket: s3.Bucket;
   public readonly migrationQueue: sqs.Queue;
@@ -120,6 +121,26 @@ export class TagRelayDatabaseStack extends cdk.Stack {
       indexName: 'provider-providerId-index',
       partitionKey: { name: 'provider', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'providerId', type: dynamodb.AttributeType.STRING },
+    });
+
+    // Invites table — lookups by token (accept flow) and by organizationId (list pending).
+    // Expiry is enforced at read time; no TTL attribute to keep the write path simple.
+    this.invitesTable = new dynamodb.Table(this, 'InvitesTable', {
+      tableName: `tag-relay-invites-${environment}`,
+      partitionKey: { name: 'inviteId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: environment === 'production' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.invitesTable.addGlobalSecondaryIndex({
+      indexName: 'token-index',
+      partitionKey: { name: 'token', type: dynamodb.AttributeType.STRING },
+    });
+
+    this.invitesTable.addGlobalSecondaryIndex({
+      indexName: 'organizationId-index',
+      partitionKey: { name: 'organizationId', type: dynamodb.AttributeType.STRING },
     });
 
     // Imports table

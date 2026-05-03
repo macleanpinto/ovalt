@@ -23,6 +23,7 @@ export interface ApiStackProps extends cdk.StackProps {
   sessionsTable: dynamodb.Table;
   apiKeysTable: dynamodb.Table;
   oauthAccountsTable: dynamodb.Table;
+  invitesTable: dynamodb.Table;
   artifactsBucket: s3.Bucket;
   migrationQueue: sqs.Queue;
 }
@@ -74,6 +75,7 @@ export class TagRelayApiStack extends cdk.Stack {
         DDB_TABLE_SESSIONS: props.sessionsTable.tableName,
         DDB_TABLE_API_KEYS: props.apiKeysTable.tableName,
         DDB_TABLE_OAUTH_ACCOUNTS: props.oauthAccountsTable.tableName,
+        DDB_TABLE_INVITES: props.invitesTable.tableName,
         S3_BUCKET: props.artifactsBucket.bucketName,
         SQS_QUEUE_URL: props.migrationQueue.queueUrl,
         WEB_BASE_URL: environment === 'production' ? 'https://ovalt.org' : 'http://localhost:5173',
@@ -92,6 +94,7 @@ export class TagRelayApiStack extends cdk.Stack {
     props.sessionsTable.grantReadWriteData(this.apiFunction);
     props.apiKeysTable.grantReadWriteData(this.apiFunction);
     props.oauthAccountsTable.grantReadWriteData(this.apiFunction);
+    props.invitesTable.grantReadWriteData(this.apiFunction);
     props.artifactsBucket.grantReadWrite(this.apiFunction);
     props.migrationQueue.grantSendMessages(this.apiFunction);
     appSecrets.grantRead(this.apiFunction);

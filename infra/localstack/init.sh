@@ -65,3 +65,11 @@ awslocal dynamodb create-table \
   --global-secondary-indexes \
     '[{"IndexName":"provider-providerId-index","KeySchema":[{"AttributeName":"provider","KeyType":"HASH"},{"AttributeName":"providerId","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}},{"IndexName":"userId-index","KeySchema":[{"AttributeName":"userId","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}}]' \
   --billing-mode PAY_PER_REQUEST >/dev/null 2>&1 || true
+
+awslocal dynamodb create-table \
+  --table-name tag-relay-invites \
+  --attribute-definitions AttributeName=inviteId,AttributeType=S AttributeName=token,AttributeType=S AttributeName=organizationId,AttributeType=S \
+  --key-schema AttributeName=inviteId,KeyType=HASH \
+  --global-secondary-indexes \
+    '[{"IndexName":"token-index","KeySchema":[{"AttributeName":"token","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}},{"IndexName":"organizationId-index","KeySchema":[{"AttributeName":"organizationId","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}}]' \
+  --billing-mode PAY_PER_REQUEST >/dev/null 2>&1 || true

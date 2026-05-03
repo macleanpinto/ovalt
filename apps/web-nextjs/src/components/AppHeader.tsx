@@ -55,6 +55,7 @@ export default function AppHeader({ className = '' }: AppHeaderProps) {
             {navLink('/dashboard', 'Dashboard')}
             {navLink('/imports', 'Imports')}
             {navLink('/migrations', 'Migrations')}
+            {navLink('/settings/team', 'Team')}
           </nav>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">

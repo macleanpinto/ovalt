@@ -10,8 +10,13 @@ import { ulid } from "ulid";
 const registerSchema = z.object({
   email: z.string().email(),
   name: z.string().optional(),
-  organizationName: z.string().min(1).max(100)
-});
+  // organizationName is required unless an inviteToken is provided.
+  organizationName: z.string().min(1).max(100).optional(),
+  inviteToken: z.string().optional()
+}).refine(
+  (data) => !!data.organizationName || !!data.inviteToken,
+  { message: "Either organizationName or inviteToken is required" }
+);
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -34,7 +39,7 @@ export function registerAuthRoutes(app: FastifyInstance, authService: AuthServic
       return reply.code(400).send({ errors: parsed.error.issues });
     }
 
-    const { email, name, organizationName } = parsed.data;
+    const { email, name, organizationName, inviteToken } = parsed.data;
 
     // Check if user already exists
     const existingUser = await authService.getUserByEmail(email);
@@ -45,21 +50,63 @@ export function registerAuthRoutes(app: FastifyInstance, authService: AuthServic
       });
     }
 
+    // If an invite token is supplied, validate it up front so we don't create
+    // a stranded user on a bad/expired/mismatched invite.
+    let invitePreflight: Awaited<ReturnType<typeof authService.getInviteByToken>> | null = null;
+    if (inviteToken) {
+      invitePreflight = await authService.getInviteByToken(inviteToken);
+      if (!invitePreflight) {
+        return reply.code(404).send({ error: "Not Found", message: "Invite not found" });
+      }
+      if (invitePreflight.status !== "pending") {
+        return reply.code(410).send({ error: "Gone", message: `Invite is ${invitePreflight.status}` });
+      }
+      if (new Date(invitePreflight.expiresAt) < new Date()) {
+        return reply.code(410).send({ error: "Gone", message: "Invite has expired" });
+      }
+      if (invitePreflight.email.toLowerCase() !== email.toLowerCase()) {
+        return reply.code(409).send({
+          error: "Conflict",
+          message: "Email does not match invite"
+        });
+      }
+    }
+
     // Create user
     const user = await authService.createUser({ email, name });
 
-    // Create organization
-    const slug = organizationName
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "-")
-      .replace(/-+/g, "-")
-      .slice(0, 50);
+    let organization: Awaited<ReturnType<typeof authService.getOrganization>>;
+    let role: string = "owner";
 
-    const organization = await authService.createOrganization({
-      name: organizationName,
-      slug: `${slug}-${ulid().slice(0, 6).toLowerCase()}`,
-      ownerId: user.userId
-    });
+    if (invitePreflight) {
+      // Join the inviter's organization; don't create a new one.
+      try {
+        const result = await authService.acceptInvite({ token: inviteToken!, user });
+        organization = await authService.getOrganization(result.invite.organizationId);
+        role = result.membership.role;
+      } catch (err) {
+        return reply.code(400).send({
+          error: "Bad Request",
+          message: err instanceof Error ? err.message : "Could not accept invite"
+        });
+      }
+    } else {
+      const slug = organizationName!
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .slice(0, 50);
+
+      organization = await authService.createOrganization({
+        name: organizationName!,
+        slug: `${slug}-${ulid().slice(0, 6).toLowerCase()}`,
+        ownerId: user.userId
+      });
+    }
+
+    if (!organization) {
+      return reply.code(500).send({ error: "Internal Server Error", message: "Failed to associate user with an organization" });
+    }
 
     // Create session
     const { token, session } = await authService.createSession({
@@ -73,7 +120,8 @@ export function registerAuthRoutes(app: FastifyInstance, authService: AuthServic
       user,
       organization,
       session,
-      token
+      token,
+      role
     });
   });
 

@@ -79,7 +79,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const register = async (email: string, password: string, name: string) => {
-    const { token, user: userData, organization: org } = await apiClient.register(email, password, name);
+    const { token, user: userData, organization: org } = await apiClient.register({
+      email,
+      name,
+      password,
+      organizationName: `${name || email}'s workspace`
+    });
     apiClient.setToken(token);
     setUser(userData);
 

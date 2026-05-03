@@ -87,9 +87,33 @@ export type Permission =
   | "members:read"
   | "members:write"
   | "members:delete"
+  | "members:invite"
   | "api_keys:read"
   | "api_keys:write"
   | "api_keys:delete";
+
+export type InviteStatus = "pending" | "accepted" | "revoked" | "expired";
+
+export type Invite = {
+  inviteId: string;
+  organizationId: string;
+  email: string;
+  role: UserRole;
+  token: string;
+  invitedByUserId: string;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt?: string;
+  acceptedByUserId?: string;
+  status: InviteStatus;
+};
+
+/** Seat limits per plan. null = unlimited. */
+export const PLAN_SEAT_LIMITS: Record<Organization["plan"], number | null> = {
+  free: 3,
+  pro: 10,
+  enterprise: null
+};
 
 /**
  * Role-based permissions matrix.
@@ -108,6 +132,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "members:read",
     "members:write",
     "members:delete",
+    "members:invite",
     "api_keys:read",
     "api_keys:write",
     "api_keys:delete"
@@ -123,6 +148,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "organization:write",
     "members:read",
     "members:write",
+    "members:invite",
     "api_keys:read",
     "api_keys:write"
   ],

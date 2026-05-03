@@ -1,16 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { apiClient } from "@/lib/api-client";
 
-export default function Register() {
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#131313]" />}>
+      <Register />
+    </Suspense>
+  );
+}
+
+function Register() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteToken = searchParams.get("inviteToken");
+  const invitedEmail = searchParams.get("email");
+
   const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(invitedEmail ?? "");
+  const [organizationName, setOrganizationName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -21,15 +34,26 @@ export default function Register() {
     }
   }, [isAuthLoading, isAuthenticated, router]);
 
+  useEffect(() => {
+    if (invitedEmail) setEmail(invitedEmail);
+  }, [invitedEmail]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await apiClient.register(name, email, password);
+      const response = await apiClient.register({
+        email,
+        name,
+        password, // kept for backwards-compat; server ignores today
+        organizationName: inviteToken ? undefined : organizationName || `${name || email}'s workspace`,
+        inviteToken: inviteToken || undefined,
+      });
       apiClient.setToken(response.token);
-      router.push("/dashboard");
+      // Full reload so AuthProvider picks up the new session+org.
+      window.location.replace("/dashboard");
     } catch (err: any) {
       setError(err.message || "Registration failed. Please try again.");
     } finally {
@@ -50,9 +74,15 @@ export default function Register() {
           </Link>
           <h1 className="text-3xl font-bold mb-2 text-white headline-font">Create Account</h1>
           <p className="text-[#bacbbe]">
-            Start your server-side migration
+            {inviteToken ? "Finish setting up your account to join the team" : "Start your server-side migration"}
           </p>
         </div>
+
+        {inviteToken && invitedEmail && (
+          <div className="mb-6 rounded-xl border border-[#41ffaf]/30 bg-[#41ffaf]/10 p-4 text-sm text-[#41ffaf]">
+            Accepting invite for <span className="font-semibold">{invitedEmail}</span>
+          </div>
+        )}
 
         <div className="bg-[#20201f] border border-white/10 rounded-2xl shadow-2xl p-8">
           {/* OAuth Buttons */}
@@ -137,9 +167,13 @@ export default function Register() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full px-4 py-2 border border-white/10 rounded-xl focus:ring-2 focus:ring-[#41ffaf]/40 focus:border-transparent bg-[#1c1b1b] text-white placeholder-white/40"
+                readOnly={!!invitedEmail}
+                className={`w-full px-4 py-2 border border-white/10 rounded-xl focus:ring-2 focus:ring-[#41ffaf]/40 focus:border-transparent bg-[#1c1b1b] text-white placeholder-white/40 ${invitedEmail ? "opacity-70 cursor-not-allowed" : ""}`}
                 placeholder="you@example.com"
               />
+              {invitedEmail && (
+                <p className="mt-1 text-xs text-zinc-500">Email is locked to match the invite.</p>
+              )}
             </div>
 
             <div>

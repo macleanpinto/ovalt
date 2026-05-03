@@ -45,6 +45,45 @@ type MeResponse =
   | { authMethod: "api_key"; organization: Organization }
   | { authMethod: string; user?: User; organization?: Organization };
 
+export type OrgRole = 'owner' | 'admin' | 'member' | 'viewer';
+
+export interface OrgMember {
+  userId: string;
+  role: OrgRole;
+  joinedAt: string;
+  invitedBy?: string;
+  email?: string;
+  name?: string;
+}
+
+export interface Invite {
+  inviteId: string;
+  organizationId: string;
+  email: string;
+  role: OrgRole;
+  token: string;
+  invitedByUserId: string;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt?: string;
+  acceptedByUserId?: string;
+  status: 'pending' | 'accepted' | 'revoked' | 'expired';
+}
+
+export interface InviteWithUrl extends Invite {
+  acceptUrl: string;
+}
+
+/** Minimal public-safe invite data for the accept page. */
+export interface PublicInvite {
+  email: string;
+  role: OrgRole;
+  organizationName: string;
+  status: Invite['status'];
+  expiresAt: string;
+  expired: boolean;
+}
+
 export interface Import {
   importId: string;
   organizationId: string;
@@ -165,10 +204,16 @@ class APIClient {
     });
   }
 
-  async register(email: string, password: string, name: string): Promise<{ token: string; user: User; organization?: Organization }> {
+  async register(params: {
+    email: string;
+    name?: string;
+    password?: string; // legacy; server currently ignores
+    organizationName?: string;
+    inviteToken?: string;
+  }): Promise<{ token: string; user: User; organization?: Organization; role?: string }> {
     return this.request('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify(params),
     });
   }
 
@@ -207,6 +252,56 @@ class APIClient {
   async getOrganizations(): Promise<Organization[]> {
     const res = await this.request<{ organizations: Organization[] }>('/auth/organizations');
     return res.organizations ?? [];
+  }
+
+  // Members
+  async listMembers(orgId: string): Promise<OrgMember[]> {
+    const res = await this.request<{ members: OrgMember[] }>(`/organizations/${orgId}/members`);
+    return res.members ?? [];
+  }
+
+  async updateMemberRole(orgId: string, userId: string, role: OrgMember['role']) {
+    return this.request<{ member: OrgMember }>(
+      `/organizations/${orgId}/members/${userId}`,
+      { method: 'PATCH', body: JSON.stringify({ role }) }
+    );
+  }
+
+  async removeMember(orgId: string, userId: string) {
+    return this.request<{ success: boolean }>(
+      `/organizations/${orgId}/members/${userId}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  // Invites
+  async listInvites(orgId: string): Promise<InviteWithUrl[]> {
+    const res = await this.request<{ invites: InviteWithUrl[] }>(`/organizations/${orgId}/invites`);
+    return res.invites ?? [];
+  }
+
+  async createInvite(orgId: string, email: string, role: 'admin' | 'member' | 'viewer') {
+    return this.request<{ invite: Invite; acceptUrl: string }>(
+      `/organizations/${orgId}/invites`,
+      { method: 'POST', body: JSON.stringify({ email, role }) }
+    );
+  }
+
+  async revokeInvite(orgId: string, inviteId: string) {
+    return this.request<{ success: boolean }>(
+      `/organizations/${orgId}/invites/${inviteId}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  /** Public — no auth header required. */
+  async getInvitePreview(token: string): Promise<PublicInvite> {
+    const res = await this.request<{ invite: PublicInvite }>(`/invites/${token}`);
+    return res.invite;
+  }
+
+  async acceptInvite(token: string): Promise<{ organizationId: string; role: string; token: string }> {
+    return this.request(`/invites/${token}/accept`, { method: 'POST' });
   }
 
   async createOrganization(name: string, slug: string): Promise<Organization> {

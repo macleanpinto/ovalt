@@ -35,6 +35,7 @@ import {
   AuthService,
   OAuthService,
   registerAuthRoutes,
+  registerMembersRoutes,
   registerOAuthRoutes,
   authenticateRequest,
   getOrganizationId,
@@ -57,6 +58,7 @@ const envSchema = z.object({
   DDB_TABLE_SESSIONS: z.string().default("tag-relay-sessions"),
   DDB_TABLE_API_KEYS: z.string().default("tag-relay-api-keys"),
   DDB_TABLE_OAUTH_ACCOUNTS: z.string().default("tag-relay-oauth-accounts"),
+  DDB_TABLE_INVITES: z.string().default("tag-relay-invites"),
   S3_BUCKET: z.string().default("tag-relay-artifacts"),
   SQS_QUEUE_URL: z.string().default("http://localhost:4566/000000000000/tag-relay-migrations"),
   API_KEY: z.string().default("dev-api-key"),
@@ -236,7 +238,8 @@ const authService = new AuthService({
   orgsTable: env.DDB_TABLE_ORGANIZATIONS,
   membersTable: env.DDB_TABLE_ORGANIZATION_MEMBERS,
   sessionsTable: env.DDB_TABLE_SESSIONS,
-  apiKeysTable: env.DDB_TABLE_API_KEYS
+  apiKeysTable: env.DDB_TABLE_API_KEYS,
+  invitesTable: env.DDB_TABLE_INVITES
 });
 
 // Initialize OAuth service
@@ -267,6 +270,7 @@ const oauthService = new OAuthService({
 
 // Register authentication routes
 registerAuthRoutes(app, authService);
+registerMembersRoutes(app, authService);
 registerOAuthRoutes(app, authService, oauthService);
 
 type GtmSession = {
@@ -388,7 +392,9 @@ app.addHook("onRequest", async (req, reply) => {
     "/auth/oauth/google",
     "/auth/oauth/github",
     "/auth/oauth/google/callback",
-    "/auth/oauth/github/callback"
+    "/auth/oauth/github/callback",
+    // Invite preview is public (accept requires auth and stays protected).
+    "GET:/invites/:token"
   ];
 
   // Add test endpoints in development/test mode

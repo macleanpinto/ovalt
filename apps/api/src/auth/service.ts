@@ -1,4 +1,12 @@
-import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  DeleteCommand,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand
+} from "@aws-sdk/lib-dynamodb";
+import { randomBytes } from "node:crypto";
 import { ulid } from "ulid";
 import { generateToken, generateSessionId, generateApiKey, hashApiKey, verifyToken } from "./jwt.js";
 import type {
@@ -9,9 +17,11 @@ import type {
   ApiKey,
   RequestContext,
   UserRole,
-  Permission
+  Permission,
+  Invite,
+  InviteStatus
 } from "./types.js";
-import { ROLE_PERMISSIONS } from "./types.js";
+import { ROLE_PERMISSIONS, PLAN_SEAT_LIMITS } from "./types.js";
 
 /**
  * Authentication and authorization service.
@@ -26,7 +36,52 @@ export type AuthServiceConfig = {
   membersTable: string;
   sessionsTable: string;
   apiKeysTable: string;
+  invitesTable: string;
 };
+
+/** Typed errors thrown by membership/invite operations so routes can map to HTTP codes. */
+export class SeatLimitError extends Error {
+  constructor(public readonly limit: number, public readonly current: number, public readonly plan: string) {
+    super(`Seat limit reached: ${current}/${limit} on ${plan} plan`);
+    this.name = "SeatLimitError";
+  }
+}
+export class InviteNotFoundError extends Error {
+  constructor() {
+    super("Invite not found");
+    this.name = "InviteNotFoundError";
+  }
+}
+export class InviteExpiredError extends Error {
+  constructor() {
+    super("Invite has expired");
+    this.name = "InviteExpiredError";
+  }
+}
+export class InviteAlreadyUsedError extends Error {
+  constructor(public readonly status: InviteStatus) {
+    super(`Invite is ${status}`);
+    this.name = "InviteAlreadyUsedError";
+  }
+}
+export class InviteEmailMismatchError extends Error {
+  constructor() {
+    super("Invite email does not match authenticated user");
+    this.name = "InviteEmailMismatchError";
+  }
+}
+export class AlreadyMemberError extends Error {
+  constructor() {
+    super("User is already a member of this organization");
+    this.name = "AlreadyMemberError";
+  }
+}
+export class LastOwnerError extends Error {
+  constructor() {
+    super("Cannot remove or demote the last owner of an organization");
+    this.name = "LastOwnerError";
+  }
+}
 
 export class AuthService {
   constructor(private config: AuthServiceConfig) {}
@@ -424,5 +479,248 @@ export class AuthService {
     if (!this.hasPermission(ctx, permission)) {
       throw new Error(`Missing required permission: ${permission}`);
     }
+  }
+
+  // ==========================================================================
+  // Members & invites
+  // ==========================================================================
+
+  /** List all members of an organization. */
+  async listMembers(organizationId: string): Promise<OrganizationMember[]> {
+    const result = await this.config.ddb.send(
+      new QueryCommand({
+        TableName: this.config.membersTable,
+        KeyConditionExpression: "organizationId = :orgId",
+        ExpressionAttributeValues: { ":orgId": organizationId }
+      })
+    );
+    return (result.Items as OrganizationMember[]) ?? [];
+  }
+
+  /**
+   * Effective seat limit for an org. `settings.maxMembers` overrides the plan default when set.
+   * null means unlimited.
+   */
+  getSeatLimit(org: Organization): number | null {
+    if (typeof org.settings?.maxMembers === "number") {
+      return org.settings.maxMembers;
+    }
+    return PLAN_SEAT_LIMITS[org.plan] ?? null;
+  }
+
+  /** Throw SeatLimitError if adding one more member would exceed the org's seat limit. */
+  async assertSeatAvailable(org: Organization): Promise<void> {
+    const limit = this.getSeatLimit(org);
+    if (limit === null) return; // unlimited
+    const members = await this.listMembers(org.organizationId);
+    if (members.length >= limit) {
+      throw new SeatLimitError(limit, members.length, org.plan);
+    }
+  }
+
+  /** Update a member's role. Prevents demoting the last owner. */
+  async updateMemberRole(organizationId: string, userId: string, newRole: UserRole): Promise<OrganizationMember> {
+    const existing = await this.getMembership(organizationId, userId);
+    if (!existing) throw new Error("Member not found");
+    if (existing.role === newRole) return existing;
+
+    if (existing.role === "owner" && newRole !== "owner") {
+      const members = await this.listMembers(organizationId);
+      const ownerCount = members.filter(m => m.role === "owner").length;
+      if (ownerCount <= 1) throw new LastOwnerError();
+    }
+
+    const result = await this.config.ddb.send(
+      new UpdateCommand({
+        TableName: this.config.membersTable,
+        Key: { organizationId, userId },
+        UpdateExpression: "SET #role = :role",
+        ExpressionAttributeNames: { "#role": "role" },
+        ExpressionAttributeValues: { ":role": newRole },
+        ReturnValues: "ALL_NEW"
+      })
+    );
+    return result.Attributes as OrganizationMember;
+  }
+
+  /** Remove a member. Prevents removing the last owner. */
+  async removeMember(organizationId: string, userId: string): Promise<void> {
+    const existing = await this.getMembership(organizationId, userId);
+    if (!existing) return;
+
+    if (existing.role === "owner") {
+      const members = await this.listMembers(organizationId);
+      const ownerCount = members.filter(m => m.role === "owner").length;
+      if (ownerCount <= 1) throw new LastOwnerError();
+    }
+
+    await this.config.ddb.send(
+      new DeleteCommand({
+        TableName: this.config.membersTable,
+        Key: { organizationId, userId }
+      })
+    );
+  }
+
+  /** Generate a URL-safe random token for invite links. */
+  private generateInviteToken(): string {
+    return randomBytes(24).toString("base64url");
+  }
+
+  /**
+   * Create an invite for a new member. Enforces seat limits (active members only
+   * count toward the cap).
+   */
+  async createInvite(params: {
+    organization: Organization;
+    email: string;
+    role: UserRole;
+    invitedByUserId: string;
+    expiresInHours?: number;
+  }): Promise<Invite> {
+    const email = params.email.toLowerCase().trim();
+
+    await this.assertSeatAvailable(params.organization);
+
+    // If a user with this email is already a member, reject.
+    const existingUser = await this.getUserByEmail(email);
+    if (existingUser) {
+      const membership = await this.getMembership(params.organization.organizationId, existingUser.userId);
+      if (membership) throw new AlreadyMemberError();
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + (params.expiresInHours ?? 24 * 7) * 60 * 60 * 1000);
+
+    const invite: Invite = {
+      inviteId: ulid(),
+      organizationId: params.organization.organizationId,
+      email,
+      role: params.role,
+      token: this.generateInviteToken(),
+      invitedByUserId: params.invitedByUserId,
+      createdAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      status: "pending"
+    };
+
+    await this.config.ddb.send(
+      new PutCommand({
+        TableName: this.config.invitesTable,
+        Item: invite,
+        ConditionExpression: "attribute_not_exists(inviteId)"
+      })
+    );
+    return invite;
+  }
+
+  /** List pending invites for an organization. */
+  async listInvites(organizationId: string): Promise<Invite[]> {
+    const result = await this.config.ddb.send(
+      new QueryCommand({
+        TableName: this.config.invitesTable,
+        IndexName: "organizationId-index",
+        KeyConditionExpression: "organizationId = :orgId",
+        ExpressionAttributeValues: { ":orgId": organizationId }
+      })
+    );
+    return ((result.Items as Invite[]) ?? []).filter(i => i.status === "pending");
+  }
+
+  /** Get invite by token. Returns null if not found. */
+  async getInviteByToken(token: string): Promise<Invite | null> {
+    const result = await this.config.ddb.send(
+      new QueryCommand({
+        TableName: this.config.invitesTable,
+        IndexName: "token-index",
+        KeyConditionExpression: "#tok = :tok",
+        ExpressionAttributeNames: { "#tok": "token" },
+        ExpressionAttributeValues: { ":tok": token },
+        Limit: 1
+      })
+    );
+    return (result.Items?.[0] as Invite) ?? null;
+  }
+
+  /** Revoke a pending invite. */
+  async revokeInvite(inviteId: string): Promise<void> {
+    await this.config.ddb.send(
+      new UpdateCommand({
+        TableName: this.config.invitesTable,
+        Key: { inviteId },
+        UpdateExpression: "SET #status = :revoked",
+        ConditionExpression: "#status = :pending",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: { ":revoked": "revoked", ":pending": "pending" }
+      })
+    );
+  }
+
+  /**
+   * Accept an invite: validates token, seat limit, email match, then adds membership
+   * and marks the invite accepted.
+   */
+  async acceptInvite(params: { token: string; user: User }): Promise<{ invite: Invite; membership: OrganizationMember }> {
+    const invite = await this.getInviteByToken(params.token);
+    if (!invite) throw new InviteNotFoundError();
+
+    if (invite.status !== "pending") throw new InviteAlreadyUsedError(invite.status);
+    if (new Date(invite.expiresAt) < new Date()) {
+      // Mark expired (best effort) so UI reflects state
+      await this.config.ddb
+        .send(
+          new UpdateCommand({
+            TableName: this.config.invitesTable,
+            Key: { inviteId: invite.inviteId },
+            UpdateExpression: "SET #status = :expired",
+            ConditionExpression: "#status = :pending",
+            ExpressionAttributeNames: { "#status": "status" },
+            ExpressionAttributeValues: { ":expired": "expired", ":pending": "pending" }
+          })
+        )
+        .catch(() => undefined);
+      throw new InviteExpiredError();
+    }
+
+    if (params.user.email.toLowerCase() !== invite.email.toLowerCase()) {
+      throw new InviteEmailMismatchError();
+    }
+
+    const existingMembership = await this.getMembership(invite.organizationId, params.user.userId);
+    if (existingMembership) throw new AlreadyMemberError();
+
+    const organization = await this.getOrganization(invite.organizationId);
+    if (!organization) throw new Error("Organization on invite no longer exists");
+
+    await this.assertSeatAvailable(organization);
+
+    const membership = await this.addMember({
+      organizationId: invite.organizationId,
+      userId: params.user.userId,
+      role: invite.role,
+      invitedBy: invite.invitedByUserId
+    });
+
+    const now = new Date().toISOString();
+    await this.config.ddb.send(
+      new UpdateCommand({
+        TableName: this.config.invitesTable,
+        Key: { inviteId: invite.inviteId },
+        UpdateExpression: "SET #status = :accepted, acceptedAt = :at, acceptedByUserId = :uid",
+        ConditionExpression: "#status = :pending",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: {
+          ":accepted": "accepted",
+          ":pending": "pending",
+          ":at": now,
+          ":uid": params.user.userId
+        }
+      })
+    );
+
+    return {
+      invite: { ...invite, status: "accepted", acceptedAt: now, acceptedByUserId: params.user.userId },
+      membership
+    };
   }
 }

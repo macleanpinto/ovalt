@@ -48,6 +48,7 @@ const apiStack = new TagRelayApiStack(app, `TagRelayApiStack-${environment}`, {
   sessionsTable: databaseStack.sessionsTable,
   apiKeysTable: databaseStack.apiKeysTable,
   oauthAccountsTable: databaseStack.oauthAccountsTable,
+  invitesTable: databaseStack.invitesTable,
   artifactsBucket: databaseStack.artifactsBucket,
   migrationQueue: databaseStack.migrationQueue,
 });
