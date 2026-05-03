@@ -6,6 +6,8 @@
 export { AuthService } from "./service.js";
 export { registerAuthRoutes } from "./routes.js";
 export { registerMembersRoutes } from "./members-routes.js";
+export { EmailService } from "./email-service.js";
+export type { EmailServiceConfig, SendEmailResult } from "./email-service.js";
 export { authenticateRequest, requirePermission, getOrganizationId, getUserId } from "./middleware.js";
 export { TenantDataService } from "./tenant-data.js";
 export { generateApiKey, generateSessionId, hashApiKey } from "./jwt.js";

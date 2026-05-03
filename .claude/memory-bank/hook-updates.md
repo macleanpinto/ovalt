@@ -2530,3 +2530,15 @@ Automatic updates written by Claude Code hook after file edits.
 - 2026-05-03 09:12:03Z | `apps/web-nextjs/src/app/invites/[token]/page.tsx`
 - 2026-05-03 09:12:21Z | `apps/web-nextjs/src/lib/auth-context.tsx`
 - 2026-05-03 09:12:54Z | `apps/web-nextjs/src/app/auth/register/page.tsx`
+- 2026-05-03 09:35:37Z | `infra/cdk/lib/api-stack.ts`
+- 2026-05-03 09:35:51Z | `infra/cdk/lib/api-stack.ts`
+- 2026-05-03 09:36:36Z | `apps/api/src/auth/email-service.ts`
+- 2026-05-03 09:36:41Z | `apps/api/src/auth/index.ts`
+- 2026-05-03 09:36:48Z | `apps/api/src/auth/members-routes.ts`
+- 2026-05-03 09:36:51Z | `apps/api/src/auth/members-routes.ts`
+- 2026-05-03 09:36:59Z | `apps/api/src/auth/members-routes.ts`
+- 2026-05-03 09:38:13Z | `apps/api/src/server.ts`
+- 2026-05-03 09:38:17Z | `apps/api/src/server.ts`
+- 2026-05-03 09:38:23Z | `apps/api/src/server.ts`
+- 2026-05-03 09:38:30Z | `apps/web-nextjs/src/lib/api-client.ts`
+- 2026-05-03 09:38:37Z | `apps/web-nextjs/src/app/settings/team/page.tsx`

@@ -56,7 +56,7 @@ export default function TeamSettings() {
     if (!organization || !inviteEmail) return;
     setSending(true);
     try {
-      const { invite, acceptUrl } = await apiClient.createInvite(
+      const { invite, acceptUrl, emailSent } = await apiClient.createInvite(
         organization.organizationId,
         inviteEmail,
         inviteRole
@@ -64,7 +64,11 @@ export default function TeamSettings() {
       setLastInviteUrl(acceptUrl);
       setInvites((prev) => [...prev, { ...invite, acceptUrl }]);
       setInviteEmail('');
-      alert.success('Invite created. Copy the link to share.');
+      if (emailSent) {
+        alert.success(`Invite sent to ${invite.email}. You can also copy the link below.`);
+      } else {
+        alert.info('Invite created. Email sending is not configured — copy the link to share.');
+      }
     } catch (err: any) {
       // Seat-limit error carries a code
       if (err?.response?.code === 'seat_limit_reached') {

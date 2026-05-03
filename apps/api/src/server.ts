@@ -37,6 +37,7 @@ import {
   registerAuthRoutes,
   registerMembersRoutes,
   registerOAuthRoutes,
+  EmailService,
   authenticateRequest,
   getOrganizationId,
   type OAuthProviderConfig
@@ -59,6 +60,10 @@ const envSchema = z.object({
   DDB_TABLE_API_KEYS: z.string().default("tag-relay-api-keys"),
   DDB_TABLE_OAUTH_ACCOUNTS: z.string().default("tag-relay-oauth-accounts"),
   DDB_TABLE_INVITES: z.string().default("tag-relay-invites"),
+  /** SES sender identity. Leave blank to disable outbound email (local dev default). */
+  EMAIL_FROM: z.string().default(""),
+  /** Region where the SES identity lives. Falls back to AWS_REGION if unset. */
+  SES_REGION: z.string().default(""),
   S3_BUCKET: z.string().default("tag-relay-artifacts"),
   SQS_QUEUE_URL: z.string().default("http://localhost:4566/000000000000/tag-relay-migrations"),
   API_KEY: z.string().default("dev-api-key"),
@@ -269,8 +274,14 @@ const oauthService = new OAuthService({
 });
 
 // Register authentication routes
+const emailService = new EmailService({
+  fromAddress: env.EMAIL_FROM,
+  region: env.SES_REGION || env.AWS_REGION,
+  endpoint: env.AWS_ENDPOINT,
+});
+
 registerAuthRoutes(app, authService);
-registerMembersRoutes(app, authService);
+registerMembersRoutes(app, authService, emailService);
 registerOAuthRoutes(app, authService, oauthService);
 
 type GtmSession = {

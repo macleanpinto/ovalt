@@ -11,6 +11,7 @@ import {
   LastOwnerError
 } from "./service.js";
 import type { UserRole, Invite } from "./types.js";
+import type { EmailService } from "./email-service.js";
 
 const inviteRoles: UserRole[] = ["admin", "member", "viewer"]; // can't invite owners
 
@@ -56,7 +57,11 @@ function publicInviteView(invite: Invite, orgName: string) {
   };
 }
 
-export function registerMembersRoutes(app: FastifyInstance, authService: AuthService) {
+export function registerMembersRoutes(
+  app: FastifyInstance,
+  authService: AuthService,
+  emailService?: EmailService
+) {
   // =========================================================================
   // Organization members
   // =========================================================================
@@ -166,7 +171,34 @@ export function registerMembersRoutes(app: FastifyInstance, authService: AuthSer
       const webBase = process.env.WEB_BASE_URL ?? "http://localhost:5173";
       const acceptUrl = `${webBase}/invites/${invite.token}`;
 
-      return reply.code(201).send({ invite, acceptUrl });
+      // Best-effort email delivery. DB + copy-link stays the source of truth;
+      // if SES isn't configured or the send fails, we still return 201 with
+      // an emailSent flag so the UI can offer copy-link as fallback.
+      let emailSent = false;
+      let emailError: string | undefined;
+      if (emailService?.isEnabled()) {
+        const content = emailService.renderInviteEmail({
+          inviterName: req.auth!.user!.name || req.auth!.user!.email,
+          organizationName: req.auth!.organization.name,
+          role: invite.role,
+          acceptUrl,
+          expiresAt: invite.expiresAt,
+        });
+        const result = await emailService.send({
+          to: invite.email,
+          subject: content.subject,
+          html: content.html,
+          text: content.text,
+          replyTo: req.auth!.user!.email,
+        });
+        emailSent = result.sent;
+        emailError = result.error;
+        if (!result.sent && result.error) {
+          req.log.warn({ inviteId: invite.inviteId, err: result.error }, "invite email failed");
+        }
+      }
+
+      return reply.code(201).send({ invite, acceptUrl, emailSent, emailError });
     } catch (err) {
       if (err instanceof SeatLimitError) {
         return reply.code(402).send({

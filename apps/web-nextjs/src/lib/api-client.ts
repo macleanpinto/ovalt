@@ -281,7 +281,7 @@ class APIClient {
   }
 
   async createInvite(orgId: string, email: string, role: 'admin' | 'member' | 'viewer') {
-    return this.request<{ invite: Invite; acceptUrl: string }>(
+    return this.request<{ invite: Invite; acceptUrl: string; emailSent?: boolean; emailError?: string }>(
       `/organizations/${orgId}/invites`,
       { method: 'POST', body: JSON.stringify({ email, role }) }
     );

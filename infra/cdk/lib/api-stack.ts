@@ -11,6 +11,7 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as ses from 'aws-cdk-lib/aws-ses';
 import { Construct } from 'constructs';
 
 export interface ApiStackProps extends cdk.StackProps {
@@ -234,6 +235,37 @@ export class TagRelayApiStack extends cdk.Stack {
           )
         ),
       });
+
+      // =========================================================
+      // SES: verify ovalt.org as a sending identity with DKIM.
+      // Route 53 DKIM + SPF records are created automatically.
+      // Sandbox note: AWS starts accounts in SES sandbox (verified-
+      // recipients only). Submit a production-access request in the
+      // SES console to send to arbitrary addresses.
+      // =========================================================
+      const emailIdentity = new ses.EmailIdentity(this, 'OvaltEmailIdentity', {
+        identity: ses.Identity.publicHostedZone(hostedZone),
+      });
+
+      // SPF record for the root domain so our SES sends align-auth.
+      // (Safe to merge manually later if the zone already has an SPF record.)
+      new route53.TxtRecord(this, 'SesSpfRecord', {
+        zone: hostedZone,
+        recordName: domainName,
+        values: ['v=spf1 include:amazonses.com ~all'],
+      });
+
+      // Allow the API Lambda to send email from any address on ovalt.org.
+      this.apiFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['ses:SendEmail', 'ses:SendRawEmail'],
+          resources: [emailIdentity.emailIdentityArn],
+        })
+      );
+
+      // Surface the sending address in env so the service layer doesn't need to hardcode it.
+      this.apiFunction.addEnvironment('EMAIL_FROM', `invites@${domainName}`);
+      this.apiFunction.addEnvironment('SES_REGION', this.region);
     }
 
     // ============================================
