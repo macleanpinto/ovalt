@@ -2542,3 +2542,5 @@ Automatic updates written by Claude Code hook after file edits.
 - 2026-05-03 09:38:23Z | `apps/api/src/server.ts`
 - 2026-05-03 09:38:30Z | `apps/web-nextjs/src/lib/api-client.ts`
 - 2026-05-03 09:38:37Z | `apps/web-nextjs/src/app/settings/team/page.tsx`
+- 2026-05-03 09:43:50Z | `infra/cdk/lib/api-stack.ts`
+- 2026-05-03 09:43:59Z | `infra/cdk/lib/api-stack.ts`

@@ -245,14 +245,23 @@ export class TagRelayApiStack extends cdk.Stack {
       // =========================================================
       const emailIdentity = new ses.EmailIdentity(this, 'OvaltEmailIdentity', {
         identity: ses.Identity.publicHostedZone(hostedZone),
+        mailFromDomain: `bounces.${domainName}`,
       });
 
-      // SPF record for the root domain so our SES sends align-auth.
-      // (Safe to merge manually later if the zone already has an SPF record.)
-      new route53.TxtRecord(this, 'SesSpfRecord', {
+      // SPF record for a dedicated MAIL FROM subdomain. Keeps the apex TXT
+      // record (Google site-verification) untouched and is the pattern AWS
+      // recommends for a custom MAIL FROM domain.
+      new route53.TxtRecord(this, 'SesMailFromSpf', {
         zone: hostedZone,
-        recordName: domainName,
+        recordName: `bounces.${domainName}`,
         values: ['v=spf1 include:amazonses.com ~all'],
+      });
+
+      // MX record for the same subdomain so SES can deliver bounces.
+      new route53.MxRecord(this, 'SesMailFromMx', {
+        zone: hostedZone,
+        recordName: `bounces.${domainName}`,
+        values: [{ priority: 10, hostName: `feedback-smtp.${this.region}.amazonses.com` }],
       });
 
       // Allow the API Lambda to send email from any address on ovalt.org.
