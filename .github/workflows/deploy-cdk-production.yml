@@ -112,7 +112,11 @@ jobs:
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
-        run: npx vitest run src/smoke.test.ts src/integration.test.ts src/e2e.test.ts src/e2e-invites.test.ts src/e2e-admin-dashboard.test.ts src/e2e-supported-types.test.ts
+        # --fileParallelism=false: run test files one at a time. LocalStack
+        # in CI has been throwing transient "non-existent table" errors when
+        # multiple E2E suites hit DynamoDB/S3 concurrently (works locally
+        # where the host has more headroom). Serialising is cheap for 34 tests.
+        run: npx vitest run --fileParallelism=false src/smoke.test.ts src/integration.test.ts src/e2e.test.ts src/e2e-invites.test.ts src/e2e-admin-dashboard.test.ts src/e2e-supported-types.test.ts
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
