@@ -146,6 +146,34 @@ awslocal dynamodb create-table \
 
 echo "✓ Created tag-relay-oauth-accounts table"
 
+# Invites table
+awslocal dynamodb create-table \
+  --table-name tag-relay-invites \
+  --attribute-definitions \
+    AttributeName=inviteId,AttributeType=S \
+    AttributeName=token,AttributeType=S \
+    AttributeName=organizationId,AttributeType=S \
+  --key-schema \
+    AttributeName=inviteId,KeyType=HASH \
+  --global-secondary-indexes \
+    '[{
+      "IndexName": "token-index",
+      "KeySchema": [{"AttributeName":"token","KeyType":"HASH"}],
+      "Projection": {"ProjectionType":"ALL"},
+      "ProvisionedThroughput": {"ReadCapacityUnits":5,"WriteCapacityUnits":5}
+    },
+    {
+      "IndexName": "organizationId-index",
+      "KeySchema": [{"AttributeName":"organizationId","KeyType":"HASH"}],
+      "Projection": {"ProjectionType":"ALL"},
+      "ProvisionedThroughput": {"ReadCapacityUnits":5,"WriteCapacityUnits":5}
+    }]' \
+  --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+  --region $AWS_REGION \
+  --endpoint-url $AWS_ENDPOINT
+
+echo "✓ Created tag-relay-invites table"
+
 # Update existing imports table to add organizationId GSI
 awslocal dynamodb update-table \
   --table-name tag-relay-imports \
@@ -214,6 +242,7 @@ echo "  - tag-relay-organization-members"
 echo "  - tag-relay-sessions"
 echo "  - tag-relay-api-keys"
 echo "  - tag-relay-oauth-accounts"
+echo "  - tag-relay-invites"
 echo ""
 echo "Updated tables:"
 echo "  - tag-relay-imports (added organizationId GSI)"
