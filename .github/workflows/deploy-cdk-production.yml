@@ -1,4 +1,4 @@
-name: Deploy with CDK (Production)
+name: Deploy production
 
 on:
   push:
@@ -7,23 +7,21 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write   # Required for OIDC
+  id-token: write   # required for OIDC
   contents: read
 
 env:
-  AWS_REGION: eu-north-1  # App region (API, Worker, Web)
-  CLOUDFRONT_REGION: us-east-1  # CloudFront region (Domain stack)
+  AWS_REGION: eu-north-1            # app region (API, Worker, Web, Database)
+  CLOUDFRONT_REGION: us-east-1      # Domain stack (CloudFront, ACM)
   ENVIRONMENT: production
-  PRODUCTION_API_URL: https://api.ovalt.org
 
 jobs:
   deploy:
-    name: Deploy Infrastructure
+    name: Build, test, deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -31,111 +29,81 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Install workspace dependencies
+        run: npm install
+
+      # Unit-level gate before we touch prod. E2E suites that talk to
+      # LocalStack or real GTM are out of scope for CI — run locally before
+      # merging. The worker tests cover the migration engine; the API smoke
+      # and integration tests exercise the Fastify routes in-process.
+      - name: Run worker unit tests
+        working-directory: apps/worker
+        run: npx vitest run
+
+      - name: Run API smoke + integration tests
+        working-directory: apps/api
+        run: npx vitest run src/smoke.test.ts src/integration.test.ts
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install root dependencies
-        run: npm ci
+      # Delegate to the single source of truth for production deploys so CI
+      # behaves identically to `AWS_PROFILE=tagrelay-prod bash ./scripts/deploy-production.sh`
+      # on a laptop. The script detects CI env-var credentials automatically
+      # and skips the shared-credentials profile in that case. It exits
+      # non-zero on any stack failure — CloudFormation rolls back the
+      # individual stack automatically.
+      - name: Deploy via deploy-production.sh
+        run: bash ./scripts/deploy-production.sh
 
-      - name: Build API
-        working-directory: apps/api
+      # Smoke-check the live endpoints. If these fail the workflow fails loud
+      # and the deploy is left in place for manual investigation — we don't
+      # auto-rollback because mixing cdk deploy with raw CloudFormation reverts
+      # causes drift and complicates the next deploy.
+      - name: Smoke check prod URLs
         run: |
-          npm ci
-          npm run build:lambda
+          set -eux
 
-      - name: Build Worker
-        working-directory: apps/worker
+          echo "Checking API health..."
+          for i in 1 2 3 4 5; do
+            body="$(curl -sS --fail --max-time 10 https://api.ovalt.org/health)" && break
+            echo "attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "$body" | grep -q '"ok":true' || {
+            echo "::error::API health check failed: $body"
+            exit 1
+          }
+
+          echo "Checking web..."
+          web_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 https://ovalt.org/)"
+          if [ "$web_status" != "200" ]; then
+            echo "::error::Web returned HTTP $web_status (expected 200)"
+            exit 1
+          fi
+
+          echo "Checking admin endpoint is reachable (expect 401 unauthenticated)..."
+          admin_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://api.ovalt.org/admin/metrics/summary)"
+          if [ "$admin_status" != "401" ]; then
+            echo "::error::Admin endpoint returned HTTP $admin_status (expected 401 without auth)"
+            exit 1
+          fi
+
+      - name: Deployment summary
+        if: always()
         run: |
-          npm ci
-          npm run build:lambda
-
-      - name: Build Next.js SSR
-        working-directory: apps/web-nextjs
-        env:
-          NEXT_PUBLIC_API_URL: ${{ env.PRODUCTION_API_URL }}
-        run: |
-          npm ci
-          npm run build:lambda
-
-      - name: Install CDK dependencies
-        working-directory: infra/cdk
-        run: |
-          npm ci
-          npm install -g aws-cdk
-
-      - name: Build CDK
-        working-directory: infra/cdk
-        run: npm run build
-
-      - name: CDK Synth
-        working-directory: infra/cdk
-        run: |
-          cdk synth --all
-
-      - name: CDK Deploy
-        working-directory: infra/cdk
-        run: |
-          ENVIRONMENT=${{ env.ENVIRONMENT }} cdk deploy --all --require-approval never
-
-      - name: Get Outputs
-        id: outputs
-        run: |
-          # Get API URL from eu-north-1
-          API_URL=$(aws cloudformation describe-stacks \
-            --stack-name tag-relay-api-${{ env.ENVIRONMENT }} \
-            --region ${{ env.AWS_REGION }} \
-            --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
-            --output text)
-
-          # Get Web URL from eu-north-1
-          WEB_URL=$(aws cloudformation describe-stacks \
-            --stack-name tag-relay-web-${{ env.ENVIRONMENT }} \
-            --region ${{ env.AWS_REGION }} \
-            --query 'Stacks[0].Outputs[?OutputKey==`WebUrl`].OutputValue' \
-            --output text)
-
-          # Get CloudFront Distribution ID from us-east-1
-          CLOUDFRONT_DIST_ID=$(aws cloudformation describe-stacks \
-            --stack-name tag-relay-domain-${{ env.ENVIRONMENT }} \
-            --region ${{ env.CLOUDFRONT_REGION }} \
-            --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
-            --output text)
-
-          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
-          echo "web_url=$WEB_URL" >> $GITHUB_OUTPUT
-          echo "cloudfront_dist_id=$CLOUDFRONT_DIST_ID" >> $GITHUB_OUTPUT
-
-      - name: Invalidate CloudFront Cache
-        run: |
-          echo "Invalidating CloudFront cache for distribution ${{ steps.outputs.outputs.cloudfront_dist_id }}"
-          INVALIDATION_ID=$(aws cloudfront create-invalidation \
-            --distribution-id ${{ steps.outputs.outputs.cloudfront_dist_id }} \
-            --paths "/*" \
-            --region ${{ env.CLOUDFRONT_REGION }} \
-            --query 'Invalidation.Id' \
-            --output text)
-          echo "CloudFront invalidation created: $INVALIDATION_ID"
-          echo "Cache invalidation in progress (takes 2-5 minutes)"
-
-      - name: Deployment Summary
-        run: |
-          echo "### Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Region:** ${{ env.AWS_REGION }} (app), ${{ env.CLOUDFRONT_REGION }} (CDN)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Production URLs" >> $GITHUB_STEP_SUMMARY
-          echo "- **Website:** https://ovalt.org" >> $GITHUB_STEP_SUMMARY
-          echo "- **API:** https://api.ovalt.org" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Raw AWS URLs" >> $GITHUB_STEP_SUMMARY
-          echo "- **API (Lambda):** ${{ steps.outputs.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Web (Lambda):** ${{ steps.outputs.outputs.web_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **CloudFront:** E1MQZJXP61Z5TO" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "⚠️ CloudFront cache invalidation in progress (2-5 minutes)" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### Production deploy: ${{ job.status }}"
+            echo ""
+            echo "- **Environment:** ${{ env.ENVIRONMENT }}"
+            echo "- **Region:** ${{ env.AWS_REGION }} (app), ${{ env.CLOUDFRONT_REGION }} (CDN)"
+            echo "- **Commit:** ${{ github.sha }}"
+            echo ""
+            echo "### URLs"
+            echo "- Website: https://ovalt.org"
+            echo "- API: https://api.ovalt.org"
+            echo "- Admin: https://ovalt.org/admin"
+          } >> "$GITHUB_STEP_SUMMARY"

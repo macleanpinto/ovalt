@@ -5,13 +5,19 @@ set -e
 # Usage: ./scripts/deploy-production.sh [aws-profile] [region]
 
 # Configuration
-AWS_PROFILE_ARG=${1:-${AWS_PROFILE:-tagrelay-prod}}
-APP_REGION=${2:-eu-north-1}  # App stacks (API, Web, Database) region
+# On a laptop we default to the `tagrelay-prod` shared-credentials profile.
+# In CI (OIDC) there is no shared-credentials file — env vars are set by
+# aws-actions/configure-aws-credentials — so skip AWS_PROFILE entirely if
+# AWS_WEB_IDENTITY_TOKEN_FILE or AWS_ACCESS_KEY_ID is already set.
+APP_REGION=${2:-eu-north-1}   # App stacks (API, Web, Database) region
 DOMAIN_REGION="us-east-1"     # Domain stack (CloudFront) must be in us-east-1
 ENVIRONMENT="production"
 
-# Export for all commands
-export AWS_PROFILE=$AWS_PROFILE_ARG
+if [ -n "${1:-}" ]; then
+  export AWS_PROFILE="$1"
+elif [ -z "${AWS_ACCESS_KEY_ID:-}" ] && [ -z "${AWS_WEB_IDENTITY_TOKEN_FILE:-}" ]; then
+  export AWS_PROFILE="${AWS_PROFILE:-tagrelay-prod}"
+fi
 export AWS_REGION=$APP_REGION  # Default region for CDK
 
 echo "==========================================="
