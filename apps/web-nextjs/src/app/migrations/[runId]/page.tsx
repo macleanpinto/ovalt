@@ -19,7 +19,7 @@ interface DetectedTag {
   name: string;
   type: string;
   category: string;
-  status: 'ready' | 'mapping' | 'needs_review';
+  status: 'ready' | 'needs_review';
   triggerSummary: string;
   parameters?: Record<string, string>;
   firingTriggerIds?: string[];
@@ -31,7 +31,7 @@ interface ContainerElement {
   type: string;
   elementType: 'tag' | 'trigger' | 'variable';
   details: any;
-  status?: 'ready' | 'mapping' | 'needs_review';
+  status?: 'ready' | 'needs_review';
 }
 
 interface MappingRecord {
@@ -40,20 +40,50 @@ interface MappingRecord {
   clientTagType: string;
   category: string;
   serverRecommendation: string;
-  confidence: number;
   provisional: boolean;
+  missingRequired?: boolean;
+  /** Client-param names the source tag is missing (e.g. ["tagId"], ["conversionLabel"]). */
+  missingParameters?: string[];
+  /** Short subtext to explain "Needs Review" when no params are missing. */
+  reviewReason?: string | null;
   manualActions: string[];
   evidence?: {
-    type: 'docs' | 'agent_web';
+    type: 'docs';
     ref: string;
-    sources?: Array<{ title: string; url: string }>;
-    searchQuery?: string;
   };
+}
+
+/** Human-readable labels for required client params we can surface & collect. */
+const CLIENT_PARAM_LABELS: Record<string, { label: string; placeholder: string; hint?: string }> = {
+  tagId: {
+    label: 'Measurement ID',
+    placeholder: 'G-XXXXXXXXXX',
+    hint: 'Your GA4 property Measurement ID (starts with G-)'
+  },
+  eventName: {
+    label: 'Event name',
+    placeholder: 'purchase',
+    hint: 'The event name sent to GA4 (e.g. purchase, sign_up, custom_event)'
+  },
+  conversionId: {
+    label: 'Conversion ID',
+    placeholder: 'AW-123456789',
+    hint: 'Google Ads Conversion ID (starts with AW-)'
+  },
+  conversionLabel: {
+    label: 'Conversion label',
+    placeholder: 'abcdEFGhijKL1mn',
+    hint: 'Per-action label from the Google Ads conversion you configured'
+  }
+};
+
+function labelForClientParam(name: string): string {
+  return CLIENT_PARAM_LABELS[name]?.label ?? name;
 }
 
 interface MigrationReport {
   runId: string;
-  confidenceScore: number;
+  needsReview?: boolean;
   summaryCounts: {
     mappings: number;
     warnings: number;
@@ -93,17 +123,20 @@ export default function MigrationWorkspace() {
   const [showGuide, setShowGuide] = useState(true);
   const [elementTypeFilter, setElementTypeFilter] = useState<'all' | 'tag' | 'trigger' | 'variable'>('tag');
   const [deploymentFilter, setDeploymentFilter] = useState<'active' | 'deployed'>('active');
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedRecommendation, setEditedRecommendation] = useState('');
   const [skippedTags, setSkippedTags] = useState<Set<string>>(new Set());
   const [showSkipped, setShowSkipped] = useState(false);
   const [approvedTags, setApprovedTags] = useState<Set<string>>(new Set());
   const [deployedTags, setDeployedTags] = useState<Set<string>>(new Set());
 
-  // Structured editing fields
-  const [editServerTagName, setEditServerTagName] = useState('');
-  const [editConfigSteps, setEditConfigSteps] = useState<string[]>([]);
-  const [editValidationNotes, setEditValidationNotes] = useState<string[]>([]);
+  /**
+   * User-supplied values for required client params that are missing on the
+   * source tag. Populated by the Review & Deploy modal and POSTed alongside
+   * approvedTagIds. Shape: { [tagId]: { [clientParamName]: value } }.
+   */
+  const [parameterOverrides, setParameterOverrides] = useState<Record<string, Record<string, string>>>({});
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  /** Set by the onClick below and invoked by the modal's Confirm button. */
+  const performDeployRef = useRef<null | (() => Promise<void>)>(null);
 
   // Deployment state
   const [isDeploying, setIsDeploying] = useState(false);
@@ -152,7 +185,7 @@ export default function MigrationWorkspace() {
         unsupportedApprovedTags.forEach(tagId => next.delete(tagId));
         return next;
       });
-      addLog(`⚠️ Removed ${unsupportedApprovedTags.length} unsupported tag(s) from approval list (Custom HTML/Image tags cannot be auto-deployed)`);
+      addLog(`⚠️ Removed ${unsupportedApprovedTags.length} unsupported tag(s) from approval list (only gaawe, googtag, awct, gclidw, cvt_5RM3Q can be deployed)`);
     }
   }, [report?.mappings]); // Run when mappings load
 
@@ -231,34 +264,29 @@ export default function MigrationWorkspace() {
     }
   };
 
-  // Map client tag types to server destination types (simplified client-side version)
+  // Strict whitelist — must stay in sync with apps/worker/src/migration/engine/supportedTypes.ts.
+  // Tags outside this list render as "Not supported" and cannot be approved or deployed.
+  const SUPPORTED_CLIENT_TAG_TYPES = ['gaawe', 'googtag', 'awct', 'gclidw', 'cvt_5RM3Q'] as const;
+
+  // Map whitelisted client tag types to server destination family.
   const getServerType = (clientType: string): string | null => {
-    const mapping: Record<string, string | null> = {
-      'googtag': 'sgtmgaaw',
-      'gaawe': 'sgtmgaaw',
-      'gaawc': 'sgtmgaaw',
-      'awct': 'sgtmgads',
-      'sp': 'sgtmgads',
-      'gclidw': 'sgtmadscl', // Conversion Linker
-      'fls': 'sgtmflood',
-      'flc': 'sgtmflood',
-      'html': null, // Custom HTML can't be directly migrated
-      'img': null, // Image tag typically can't migrate
-    };
-
-    // Custom templates (Meta, TikTok, etc.) start with 'cvt_'
-    if (clientType && clientType.startsWith('cvt_')) {
-      return 'cvt'; // Custom variable template - can be migrated
+    switch (clientType) {
+      case 'googtag':
+      case 'gaawe':
+        return 'sgtmgaaw';
+      case 'awct':
+        return 'sgtmgads';
+      case 'gclidw':
+        return 'sgtmadscl';
+      case 'cvt_5RM3Q':
+        return 'cvt';
+      default:
+        return null;
     }
-
-    return mapping[clientType] || 'unknown';
   };
 
-  // Check if tag type is supported for automatic migration
-  // Only block Custom HTML and Custom Image tags - everything else can be attempted
   const isTagTypeSupported = (clientType: string): boolean => {
-    const serverType = getServerType(clientType);
-    return serverType !== null; // Only null means truly unsupported (html, img)
+    return (SUPPORTED_CLIENT_TAG_TYPES as readonly string[]).includes(clientType);
   };
 
   // Get human-readable label for server type (legacy / family)
@@ -543,6 +571,19 @@ export default function MigrationWorkspace() {
             setDeployedTags(allDeployedTagIds);
             addLog(`✅ Loaded ${allDeployedTagIds.size} previously deployed tags`);
           }
+
+          // Hydrate the Deployed / Failed tiles from the most recent history
+          // entry so a page refresh after a completed deploy still shows counts.
+          const lastDep = runData.deploymentHistory[runData.deploymentHistory.length - 1] as any;
+          if (lastDep) {
+            setDeploymentResult({
+              deployed: typeof lastDep.deployed === 'number' ? lastDep.deployed : 0,
+              failed: typeof lastDep.failed === 'number' ? lastDep.failed : 0,
+              error: lastDep.error,
+              serverWorkspacePath: lastDep.serverWorkspacePath,
+              serverWorkspaceName: lastDep.serverWorkspaceName
+            });
+          }
         }
 
         // Try to load report if available. The report is immutable once generated, so only
@@ -601,13 +642,14 @@ export default function MigrationWorkspace() {
         // Handle deployment status updates - only log when status changes
         const currentDeploymentStatus = (runData as any).deploymentStatus || '';
         if (currentDeploymentStatus && currentDeploymentStatus !== pollingStateRef.current.previousDeploymentStatus) {
+          const history = (runData as any).deploymentHistory as any[] | undefined;
+          const lastDep = Array.isArray(history) && history.length > 0 ? history[history.length - 1] : null;
+
           if (currentDeploymentStatus === 'completed') {
             // Always clear deploying UI when API says completed (also fixes fast deploys where we never polled "deploying")
             if (pollingStateRef.current.previousDeploymentStatus === 'deploying') {
               addLog('✅ Deployment completed successfully');
-              if ((runData as any).deploymentHistory && (runData as any).deploymentHistory.length > 0) {
-                const lastDep = (runData as any).deploymentHistory[(runData as any).deploymentHistory.length - 1];
-
+              if (lastDep) {
                 // Show deployment summary
                 const approvedCount = lastDep.deployedTagIds?.length || 0;
                 if (approvedCount > 0) {
@@ -646,6 +688,15 @@ export default function MigrationWorkspace() {
                 }
               }
             }
+            // Hydrate the "Deployed / Failed" tiles from the worker's history entry.
+            if (lastDep) {
+              setDeploymentResult({
+                deployed: typeof lastDep.deployed === 'number' ? lastDep.deployed : 0,
+                failed: typeof lastDep.failed === 'number' ? lastDep.failed : 0,
+                serverWorkspacePath: lastDep.serverWorkspacePath,
+                serverWorkspaceName: lastDep.serverWorkspaceName
+              });
+            }
             setIsDeploying(false);
             pollingStateRef.current.deploymentStartTime = null;
           } else if (currentDeploymentStatus === 'failed') {
@@ -665,6 +716,17 @@ export default function MigrationWorkspace() {
                 addLog('🔑 GTM OAuth session expired. Click "Reconnect GTM" above to authenticate.');
                 alert.error('GTM OAuth session expired. Please reconnect to Google Tag Manager.');
               }
+            }
+            // Hydrate tiles for partial-failure case: worker still records how
+            // many server tags landed before the error.
+            if (lastDep) {
+              setDeploymentResult({
+                deployed: typeof lastDep.deployed === 'number' ? lastDep.deployed : 0,
+                failed: typeof lastDep.failed === 'number' ? lastDep.failed : 0,
+                error: lastDep.error,
+                serverWorkspacePath: lastDep.serverWorkspacePath,
+                serverWorkspaceName: lastDep.serverWorkspaceName
+              });
             }
             setIsDeploying(false);
             pollingStateRef.current.deploymentStartTime = null;
@@ -730,10 +792,18 @@ export default function MigrationWorkspace() {
     };
   }, [runId]);
 
-  // Reset edit mode when selected element changes
-  useEffect(() => {
-    setIsEditing(false);
-  }, [selectedElement]);
+  /**
+   * Gate for opening the "Deploy changes" modal: require at least one approved
+   * tag. Without this, the button takes the user to a deployment screen with
+   * nothing to deploy, which is confusing.
+   */
+  const openDeploymentModal = () => {
+    if (approvedTags.size === 0) {
+      alert.warning('Approve at least one tag before deploying changes.');
+      return;
+    }
+    setShowDeploymentModal(true);
+  };
 
   const addLog = (message: string) => {
     const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
@@ -799,8 +869,6 @@ export default function MigrationWorkspace() {
     switch (status) {
       case 'ready':
         return 'bg-secondary/10 text-secondary border-secondary/20';
-      case 'mapping':
-        return 'bg-[#F63A22]/10 text-[#F63A22] border-[#F63A22]/20';
       case 'needs_review':
         return 'bg-[#ffb4a7]/10 text-[#ffb4a7] border-[#ffb4a7]/20';
       default:
@@ -812,8 +880,6 @@ export default function MigrationWorkspace() {
     switch (status) {
       case 'ready':
         return 'READY';
-      case 'mapping':
-        return 'MAPPING';
       case 'needs_review':
         return 'REVIEW';
       default:
@@ -825,8 +891,6 @@ export default function MigrationWorkspace() {
     switch (status) {
       case 'ready':
         return 'check_circle';
-      case 'mapping':
-        return 'error';
       case 'needs_review':
         return 'warning';
       default:
@@ -899,7 +963,7 @@ export default function MigrationWorkspace() {
 
   const completedCount = (report?.detectedTags || []).filter(tag => tag.status === 'ready').length;
   const detectedTagCount = report?.detectedTags?.length || 0;
-  /** Footer bar + confidence: resolved = deployed to server or explicitly skipped */
+  /** Footer progress bar: resolved = deployed to server or explicitly skipped */
   const deploymentResolvedCount = deployedTags.size + skippedTags.size;
   const deploymentProgressPercent =
     detectedTagCount > 0 ? (deploymentResolvedCount / detectedTagCount) * 100 : 0;
@@ -1087,7 +1151,7 @@ export default function MigrationWorkspace() {
             </nav>
             <button
               className="bg-[#41ffaf] text-[#003822] px-4 py-1.5 rounded-lg text-sm font-semibold hover:opacity-90 transition-all active:scale-95"
-              onClick={() => setShowDeploymentModal(true)}
+              onClick={openDeploymentModal}
             >
               Deploy Changes
             </button>
@@ -1270,7 +1334,7 @@ export default function MigrationWorkspace() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowDeploymentModal(true)}
+                    onClick={openDeploymentModal}
                     disabled={isDeploying}
                     className="px-6 py-3 rounded-lg text-sm font-bold bg-[#41ffaf] text-[#003822] hover:opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
@@ -1375,11 +1439,18 @@ export default function MigrationWorkspace() {
                   const status = detected?.status ?? 'ready';
                   const isSupported = isTagTypeSupported(m.clientTagType);
                   const badge =
-                    status === 'ready'
-                      ? 'bg-green-500/10 text-green-400'
-                      : status === 'needs_review'
-                        ? 'bg-orange-500/10 text-orange-400'
-                        : 'bg-white/10 text-[#bacbbe]';
+                    !isSupported
+                      ? 'bg-red-500/10 text-red-400'
+                      : status === 'ready'
+                        ? 'bg-green-500/10 text-green-400'
+                        : status === 'needs_review'
+                          ? 'bg-orange-500/10 text-orange-400'
+                          : 'bg-white/10 text-[#bacbbe]';
+                  const badgeLabel = !isSupported
+                    ? 'Not supported'
+                    : status === 'needs_review'
+                      ? 'Needs Review'
+                      : 'Ready';
 
                   return (
                     <div
@@ -1401,15 +1472,45 @@ export default function MigrationWorkspace() {
                             <h3 className="font-semibold text-white truncate">{m.clientTagName}</h3>
                             <div className="flex items-center gap-3 mt-1 flex-wrap">
                               <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${badge}`}>
-                                {status === 'needs_review' ? 'Needs Review' : 'Ready'}
+                                {badgeLabel}
                               </span>
                               {!isSupported && (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-500/10 text-red-400 border border-red-500/30">
-                                  Manual Setup Required
+                                <span className="text-[11px] text-red-400/80">
+                                  {m.clientTagType} — manual rebuild in server container
                                 </span>
                               )}
                               <span className="text-xs text-gray-500 font-mono truncate">Trigger: {detected?.triggerSummary || '—'}</span>
                             </div>
+                            {isSupported && m.missingParameters && m.missingParameters.length > 0 && (
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className="text-[10px] uppercase tracking-wider text-orange-400/80 font-semibold">Missing info</span>
+                                {m.missingParameters.map((p) => {
+                                  const override = parameterOverrides[m.clientTagId]?.[p];
+                                  const filled = typeof override === 'string' && override.trim().length > 0;
+                                  return (
+                                    <span
+                                      key={p}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+                                        filled
+                                          ? 'bg-green-500/10 text-green-400 border-green-500/30'
+                                          : 'bg-orange-500/10 text-orange-400 border-orange-500/30'
+                                      }`}
+                                      title={filled ? `Will deploy with value: ${override}` : CLIENT_PARAM_LABELS[p]?.hint ?? p}
+                                    >
+                                      {filled ? '✓ ' : ''}{labelForClientParam(p)}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {isSupported &&
+                              status === 'needs_review' &&
+                              (!m.missingParameters || m.missingParameters.length === 0) &&
+                              m.reviewReason && (
+                                <div className="mt-1 text-[11px] text-orange-400/80">
+                                  {m.reviewReason}
+                                </div>
+                              )}
                           </div>
                         </div>
 
@@ -1419,7 +1520,7 @@ export default function MigrationWorkspace() {
                             <button
                               onClick={() => {
                                 if (!isSupported) {
-                                  alert.warning('This tag type requires manual server-side setup. It cannot be automatically deployed.');
+                                  alert.warning(`Tag type "${m.clientTagType}" is not supported. Supported types: gaawe, googtag, awct, gclidw, cvt_5RM3Q.`);
                                   return;
                                 }
                                 const next = new Set(approvedTags);
@@ -1432,7 +1533,7 @@ export default function MigrationWorkspace() {
                                 !isSupported ? 'bg-white/5 cursor-not-allowed opacity-40' :
                                 isApproved ? 'bg-[#41ffaf]' : 'bg-white/10'
                               }`}
-                              title={!isSupported ? 'Custom HTML tags cannot be automatically migrated' : ''}
+                              title={!isSupported ? `Tag type "${m.clientTagType}" is not supported` : ''}
                             >
                               <span
                                 className={`inline-block h-4 w-4 transform rounded-full transition ${
@@ -1514,9 +1615,6 @@ export default function MigrationWorkspace() {
                           </div>
                           {isSupported && (
                             <div className="mt-6 flex justify-end gap-3">
-                              <button className="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 transition-all">
-                                Manual Edit
-                              </button>
                               <button
                                 onClick={() => setApprovedTags((prev) => new Set(prev).add(m.clientTagId))}
                                 className="px-4 py-2 rounded-lg text-xs font-semibold bg-[#41ffaf] text-[#003822]"
@@ -1555,7 +1653,7 @@ export default function MigrationWorkspace() {
               </div>
               <button
                 type="button"
-                onClick={() => setShowDeploymentModal(true)}
+                onClick={openDeploymentModal}
                 disabled={isDeploying}
                 className="px-6 py-2 rounded-lg text-sm font-bold bg-[#41ffaf] text-[#003822] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
               >
@@ -1609,6 +1707,111 @@ export default function MigrationWorkspace() {
         </footer>
 
         {/* Deployment screen (modal) */}
+        {showReviewModal && (() => {
+          const approvedMappingsNeedingReview = Array.from(approvedTags)
+            .map(id => tagMappings.find(m => m.clientTagId === id))
+            .filter((m): m is MappingRecord =>
+              !!m && isTagTypeSupported(m.clientTagType) && Array.isArray(m.missingParameters) && m.missingParameters.length > 0
+            );
+          const allFilled = approvedMappingsNeedingReview.every(m =>
+            m.missingParameters!.every(p => {
+              const v = parameterOverrides[m.clientTagId]?.[p];
+              return typeof v === 'string' && v.trim().length > 0;
+            })
+          );
+          const setOverride = (tagId: string, paramName: string, value: string) => {
+            setParameterOverrides(prev => ({
+              ...prev,
+              [tagId]: { ...(prev[tagId] ?? {}), [paramName]: value }
+            }));
+          };
+          return (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+              <div className="bg-[#131313] border border-white/10 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
+                <div className="px-6 py-5 border-b border-white/10 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Review & Deploy</h2>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Fill in the required parameters for {approvedMappingsNeedingReview.length} tag
+                      {approvedMappingsNeedingReview.length === 1 ? '' : 's'} before deploying.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowReviewModal(false)}
+                    className="text-zinc-400 hover:text-white transition-colors"
+                    aria-label="Close"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
+                  {approvedMappingsNeedingReview.map(m => (
+                    <div key={m.clientTagId} className="rounded-xl border border-white/[0.08] bg-[#1c1b1b] p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="material-symbols-outlined text-[#41ffaf] text-base">
+                          {getIconForTagType(m.clientTagType)}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-white truncate">{m.clientTagName}</div>
+                          <div className="text-[11px] text-zinc-500 font-mono">{m.clientTagType}</div>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        {(m.missingParameters ?? []).map(p => {
+                          const meta = CLIENT_PARAM_LABELS[p] ?? { label: p, placeholder: '', hint: '' };
+                          const value = parameterOverrides[m.clientTagId]?.[p] ?? '';
+                          return (
+                            <div key={p}>
+                              <label className="block text-[11px] font-semibold text-zinc-300 mb-1">
+                                {meta.label}
+                                <span className="ml-1 text-[10px] text-zinc-500 font-mono">({p})</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={value}
+                                onChange={e => setOverride(m.clientTagId, p, e.target.value)}
+                                placeholder={meta.placeholder}
+                                maxLength={1024}
+                                className="w-full rounded-lg bg-[#131313] border border-white/10 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-[#41ffaf]/60"
+                              />
+                              {meta.hint && (
+                                <p className="mt-1 text-[11px] text-zinc-500">{meta.hint}</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="px-6 py-4 border-t border-white/10 flex items-center justify-between gap-3">
+                  <button
+                    onClick={() => setShowReviewModal(false)}
+                    className="text-sm text-zinc-400 hover:text-white transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!allFilled) return;
+                      setShowReviewModal(false);
+                      // Re-click deploy now that overrides satisfy the gate.
+                      setTimeout(() => document.getElementById('deploy-now-btn')?.click(), 0);
+                    }}
+                    disabled={!allFilled}
+                    className="bg-[#41ffaf] text-[#003822] font-bold px-6 py-2.5 rounded-lg flex items-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
+                  >
+                    <span>Confirm & Deploy</span>
+                    <span className="material-symbols-outlined text-lg">rocket_launch</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {showDeploymentModal && (
           <div className="fixed inset-0 z-[60] flex flex-col bg-black/70 backdrop-blur-sm">
             {needsGtmReconnect && (
@@ -1941,12 +2144,36 @@ export default function MigrationWorkspace() {
 
                       const unsupportedCount = approvedTags.size - supportedApprovedTags.length;
                       if (unsupportedCount > 0) {
-                        addLog(`⚠️ ${unsupportedCount} approved tag(s) cannot be automatically migrated (Custom HTML, Custom Image, etc.)`);
-                        addLog('These tags require manual server-side setup in your GTM container.');
+                        addLog(`⚠️ ${unsupportedCount} approved tag(s) are not supported (only gaawe, googtag, awct, gclidw, cvt_5RM3Q can be deployed).`);
+                        addLog('Unsupported tags require a manual rebuild in the server container.');
                       }
 
                       if (supportedApprovedTags.length === 0) {
-                        alert.error('None of the approved tags can be automatically migrated. All selected tags require manual setup (Custom HTML, Custom Image, etc.).');
+                        alert.error('None of the approved tags are supported for automated migration. Supported types: gaawe, googtag, awct, gclidw, cvt_5RM3Q.');
+                        return;
+                      }
+
+                      // Gate: if any approved+supported tag still has an unfilled
+                      // missing required param, open the Review & Deploy modal
+                      // to collect values before hitting the API.
+                      const tagsNeedingReview = supportedApprovedTags
+                        .map(id => tagMappings.find(m => m.clientTagId === id))
+                        .filter((m): m is MappingRecord =>
+                          !!m && Array.isArray(m.missingParameters) && m.missingParameters.some(p => {
+                            const v = parameterOverrides[m.clientTagId]?.[p];
+                            return !(typeof v === 'string' && v.trim().length > 0);
+                          })
+                        );
+                      if (tagsNeedingReview.length > 0) {
+                        // Store the deploy continuation so the modal's confirm
+                        // button can call it after the user fills the form.
+                        performDeployRef.current = async () => {
+                          setShowReviewModal(false);
+                          // Re-invoke the deploy path — no recursion risk because
+                          // by this point the overrides satisfy the gate.
+                          document.getElementById('deploy-now-btn')?.click();
+                        };
+                        setShowReviewModal(true);
                         return;
                       }
 
@@ -2005,6 +2232,14 @@ export default function MigrationWorkspace() {
                           addLog('🔑 Using provided Meta Access Token');
                         }
 
+                        // Only send overrides for tags that are actually being deployed.
+                        const scopedOverrides: Record<string, Record<string, string>> = {};
+                        for (const tagId of supportedApprovedTags) {
+                          const forTag = parameterOverrides[tagId];
+                          if (forTag && Object.keys(forTag).length > 0) {
+                            scopedOverrides[tagId] = forTag;
+                          }
+                        }
                         const result = await apiClient.deployApprovedTags(
                           runId,
                           supportedApprovedTags,
@@ -2013,7 +2248,8 @@ export default function MigrationWorkspace() {
                           serverContainerPath,
                           transport_url,
                           gtmSessionId,
-                          metaAccessToken || undefined
+                          metaAccessToken || undefined,
+                          Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined
                         );
 
                         // Check if deployment is async (202) or sync (200)
@@ -2042,6 +2278,7 @@ export default function MigrationWorkspace() {
                         setIsDeploying(false);
                       }
                     }}
+                    id="deploy-now-btn"
                     className="bg-[#41ffaf] text-[#003822] font-bold px-8 py-3.5 rounded-lg flex items-center gap-3 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
                     disabled={isDeploying || !serverContainerPath}
                     title={!serverContainerPath ? 'Select or create a server container first' : undefined}

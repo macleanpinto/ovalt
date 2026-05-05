@@ -48,7 +48,6 @@ export const ga4Rules: Rule[] = [
         "Enable Enhanced Measurement features as needed"
       ]
     },
-    confidence: 9.2,
     provisional: false,
     evidenceRef: "https://developers.google.com/tag-platform/tag-manager/server-side/send-data",
     constraints: [
@@ -115,7 +114,6 @@ export const ga4Rules: Rule[] = [
         "Validate currency and value parameters for conversion events"
       ]
     },
-    confidence: 8.5,
     provisional: false,
     evidenceRef: "https://developers.google.com/analytics/devguides/collection/ga4/reference/events",
     constraints: [
@@ -126,15 +124,7 @@ export const ga4Rules: Rule[] = [
         message: "Event name is required for GA4 event tags"
       }
     ],
-    manualReview: [
-      {
-        trigger: "lowConfidence",
-        threshold: 8.0,
-        priority: "medium",
-        action: "Verify event parameter mappings match GA4 recommended event schema for this event type"
-      }
-    ],
-    tags: ["ga4", "analytics", "google", "events"]
+        tags: ["ga4", "analytics", "google", "events"]
   },
   {
     id: "ga4-ecommerce-purchase",
@@ -208,7 +198,6 @@ export const ga4Rules: Rule[] = [
         "Check that value represents total transaction value including tax and shipping"
       ]
     },
-    confidence: 9.0,
     provisional: false,
     evidenceRef: "https://developers.google.com/analytics/devguides/collection/ga4/ecommerce",
     constraints: [
@@ -286,7 +275,6 @@ export const ga4Rules: Rule[] = [
         "Include item_brand, item_category for enhanced reporting"
       ]
     },
-    confidence: 8.8,
     provisional: false,
     evidenceRef: "https://developers.google.com/analytics/devguides/collection/ga4/ecommerce",
     constraints: [

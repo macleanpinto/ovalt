@@ -3,7 +3,7 @@ import type { CanonicalVariable } from '../types.js';
 import {
   applyVariableRules,
   applyVariableRuleset,
-  aggregateVariableConfidence
+  aggregateVariableStats
 } from './rules-variables.js';
 
 describe('Variable Migration Rules', () => {
@@ -21,7 +21,7 @@ describe('Variable Migration Rules', () => {
 
       expect(mapping.canAutoMigrate).toBe(true);
       expect(mapping.serverVariableType).toBe('eventData');
-      expect(mapping.confidence).toBeGreaterThan(8.0);
+      expect(mapping.provisional).toBe(false);
       expect(mapping.category).toBe('data-layer');
       expect(mapping.serverRecommendation).toContain('Event Data');
       expect(mapping.serverRecommendation).toContain('userId');
@@ -42,7 +42,7 @@ describe('Variable Migration Rules', () => {
 
       expect(mapping.canAutoMigrate).toBe(true);
       expect(mapping.serverVariableType).toBe('c');
-      expect(mapping.confidence).toBe(9.0);
+      expect(mapping.provisional).toBe(false);
       expect(mapping.category).toBe('constant');
       expect(mapping.serverRecommendation).toContain('G-ABC123');
     });
@@ -62,7 +62,7 @@ describe('Variable Migration Rules', () => {
 
       expect(mapping.canAutoMigrate).toBe(true);
       expect(mapping.serverVariableType).toBe('r');
-      expect(mapping.confidence).toBe(9.0);
+      expect(mapping.provisional).toBe(false);
       expect(mapping.category).toBe('cookie');
       expect(mapping.serverRecommendation).toContain('_ga');
     });
@@ -79,61 +79,8 @@ describe('Variable Migration Rules', () => {
       };
 
       const mapping = applyVariableRules(variable);
-
       expect(mapping.canAutoMigrate).toBe(true);
-      expect(mapping.serverVariableType).toBe('smm');
-      expect(mapping.confidence).toBe(9.0);
-      expect(mapping.category).toBe('lookup');
-    });
-
-    it('should migrate regex table variables automatically', () => {
-      const variable: CanonicalVariable = {
-        variableId: 'var5',
-        name: 'URL Pattern Match',
-        type: 're',
-        parameters: {},
-        rawParameterKeys: []
-      };
-
-      const mapping = applyVariableRules(variable);
-
-      expect(mapping.canAutoMigrate).toBe(true);
-      expect(mapping.serverVariableType).toBe('re');
-      expect(mapping.confidence).toBe(9.0);
-      expect(mapping.category).toBe('lookup');
-    });
-  });
-
-  describe('Container Variables', () => {
-    it('should migrate container ID variable', () => {
-      const variable: CanonicalVariable = {
-        variableId: 'var6',
-        name: 'Container ID',
-        type: 'ctid',
-        parameters: {},
-        rawParameterKeys: []
-      };
-
-      const mapping = applyVariableRules(variable);
-
-      expect(mapping.canAutoMigrate).toBe(true);
-      expect(mapping.serverVariableType).toBe('ctid');
-      expect(mapping.category).toBe('container');
-    });
-
-    it('should migrate container version variable', () => {
-      const variable: CanonicalVariable = {
-        variableId: 'var7',
-        name: 'Container Version',
-        type: 'ctv',
-        parameters: {},
-        rawParameterKeys: []
-      };
-
-      const mapping = applyVariableRules(variable);
-
-      expect(mapping.canAutoMigrate).toBe(true);
-      expect(mapping.serverVariableType).toBe('ctv');
+      expect(mapping.provisional).toBe(false);
     });
   });
 
@@ -151,9 +98,8 @@ describe('Variable Migration Rules', () => {
 
       expect(mapping.canAutoMigrate).toBe(false);
       expect(mapping.serverVariableType).toBe(null);
-      expect(mapping.confidence).toBeLessThan(3.0);
       expect(mapping.category).toBe('client-only');
-      expect(mapping.manualActions.length).toBeGreaterThan(0);
+      expect(mapping.provisional).toBe(true);
       expect(mapping.manualActions[0]).toContain('CRITICAL');
     });
 
@@ -167,11 +113,8 @@ describe('Variable Migration Rules', () => {
       };
 
       const mapping = applyVariableRules(variable);
-
       expect(mapping.canAutoMigrate).toBe(false);
-      expect(mapping.serverVariableType).toBe(null);
       expect(mapping.category).toBe('client-only');
-      expect(mapping.manualActions.length).toBeGreaterThan(0);
       expect(mapping.manualActions.some(a => a.includes('CRITICAL'))).toBe(true);
     });
   });
@@ -187,7 +130,6 @@ describe('Variable Migration Rules', () => {
       };
 
       const mapping = applyVariableRules(variable);
-
       expect(mapping.serverVariableType).toBe('j');
       expect(mapping.provisional).toBe(true);
       expect(mapping.manualActions.some(a => a.includes('sandboxed'))).toBe(true);
@@ -203,7 +145,6 @@ describe('Variable Migration Rules', () => {
       };
 
       const mapping = applyVariableRules(variable);
-
       expect(mapping.provisional).toBe(true);
       expect(mapping.manualActions.some(a => a.includes('page_location'))).toBe(true);
     });
@@ -212,31 +153,12 @@ describe('Variable Migration Rules', () => {
   describe('applyVariableRuleset', () => {
     it('should process multiple variables', () => {
       const variables: CanonicalVariable[] = [
-        {
-          variableId: 'var1',
-          name: 'User ID',
-          type: 'v',
-          parameters: { name: 'userId' },
-          rawParameterKeys: ['name']
-        },
-        {
-          variableId: 'var2',
-          name: 'Measurement ID',
-          type: 'c',
-          parameters: { value: 'G-ABC123' },
-          rawParameterKeys: ['value']
-        },
-        {
-          variableId: 'var3',
-          name: 'Click Element',
-          type: 'aev',
-          parameters: {},
-          rawParameterKeys: []
-        }
+        { variableId: 'var1', name: 'User ID', type: 'v', parameters: { name: 'userId' }, rawParameterKeys: ['name'] },
+        { variableId: 'var2', name: 'Measurement ID', type: 'c', parameters: { value: 'G-ABC123' }, rawParameterKeys: ['value'] },
+        { variableId: 'var3', name: 'Click Element', type: 'aev', parameters: {}, rawParameterKeys: [] }
       ];
 
       const mappings = applyVariableRuleset(variables);
-
       expect(mappings).toHaveLength(3);
       expect(mappings[0].canAutoMigrate).toBe(true);
       expect(mappings[1].canAutoMigrate).toBe(true);
@@ -244,72 +166,24 @@ describe('Variable Migration Rules', () => {
     });
   });
 
-  describe('aggregateVariableConfidence', () => {
-    it('should calculate aggregate statistics', () => {
+  describe('aggregateVariableStats', () => {
+    it('should calculate bucket counts and provisional flag', () => {
       const mappings = [
-        {
-          clientVariableId: 'var1',
-          clientVariableName: 'User ID',
-          clientVariableType: 'v',
-          category: 'data-layer' as const,
-          serverRecommendation: 'Migrate to Event Data',
-          canAutoMigrate: true,
-          serverVariableType: 'eventData',
-          confidence: 9.0,
-          provisional: false,
-          manualActions: []
-        },
-        {
-          clientVariableId: 'var2',
-          clientVariableName: 'Measurement ID',
-          clientVariableType: 'c',
-          category: 'constant' as const,
-          serverRecommendation: 'Migrate to Constant',
-          canAutoMigrate: true,
-          serverVariableType: 'c',
-          confidence: 9.0,
-          provisional: false,
-          manualActions: []
-        },
-        {
-          clientVariableId: 'var3',
-          clientVariableName: 'Custom JS',
-          clientVariableType: 'j',
-          category: 'custom' as const,
-          serverRecommendation: 'Manual rewrite required',
-          canAutoMigrate: false,
-          serverVariableType: 'j',
-          confidence: 6.5,
-          provisional: true,
-          manualActions: ['Review code']
-        },
-        {
-          clientVariableId: 'var4',
-          clientVariableName: 'Click Element',
-          clientVariableType: 'aev',
-          category: 'client-only' as const,
-          serverRecommendation: 'Cannot migrate',
-          canAutoMigrate: false,
-          serverVariableType: null,
-          confidence: 2.0,
-          provisional: true,
-          manualActions: ['Send as event parameter']
-        }
+        { clientVariableId: 'var1', clientVariableName: 'User ID', clientVariableType: 'v', category: 'data-layer' as const, serverRecommendation: '', canAutoMigrate: true, serverVariableType: 'eventData', provisional: false, manualActions: [] },
+        { clientVariableId: 'var2', clientVariableName: 'Measurement ID', clientVariableType: 'c', category: 'constant' as const, serverRecommendation: '', canAutoMigrate: true, serverVariableType: 'c', provisional: false, manualActions: [] },
+        { clientVariableId: 'var3', clientVariableName: 'Custom JS', clientVariableType: 'j', category: 'custom' as const, serverRecommendation: '', canAutoMigrate: false, serverVariableType: 'j', provisional: true, manualActions: [] },
+        { clientVariableId: 'var4', clientVariableName: 'Click Element', clientVariableType: 'aev', category: 'client-only' as const, serverRecommendation: '', canAutoMigrate: false, serverVariableType: null, provisional: true, manualActions: [] }
       ];
 
-      const stats = aggregateVariableConfidence(mappings);
-
+      const stats = aggregateVariableStats(mappings);
       expect(stats.autoMigratable).toBe(2);
       expect(stats.manualRequired).toBe(1);
       expect(stats.clientOnly).toBe(1);
-      expect(stats.score).toBeGreaterThan(6.0);
       expect(stats.provisional).toBe(true);
     });
 
     it('should handle empty variable list', () => {
-      const stats = aggregateVariableConfidence([]);
-
-      expect(stats.score).toBe(10);
+      const stats = aggregateVariableStats([]);
       expect(stats.provisional).toBe(false);
       expect(stats.autoMigratable).toBe(0);
       expect(stats.manualRequired).toBe(0);

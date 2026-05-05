@@ -264,7 +264,6 @@ export default function Dashboard() {
                       <p className="font-semibold text-white">Migration Run {run.runId.slice(0, 8)}</p>
                       <p className="text-sm text-[#bacbbe]">
                         {formatRelativeTime(run.createdAt)}
-                        {run.confidenceScore && ` • ${run.confidenceScore.toFixed(1)}% confidence`}
                       </p>
                     </div>
                     <span className={`px-3 py-1 rounded-xl text-sm label-font ${getStatusColor(run.status)}`}>

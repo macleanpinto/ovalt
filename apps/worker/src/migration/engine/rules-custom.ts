@@ -29,7 +29,6 @@ export const customRules: Rule[] = [
         "Server-side tags should check consent state before firing"
       ]
     },
-    confidence: 6.0,
     provisional: true,
     evidenceRef: "https://support.cookiebot.com/hc/en-us/articles/360016047000-Cookiebot-and-Google-Tag-Manager",
     constraints: [
@@ -71,7 +70,6 @@ export const customRules: Rule[] = [
         "Test consent blocking in server preview mode"
       ]
     },
-    confidence: 6.2,
     provisional: true,
     evidenceRef: "https://support.google.com/tagmanager/answer/10718549",
     constraints: [
@@ -113,7 +111,6 @@ export const customRules: Rule[] = [
         "Test rebuilt tag thoroughly in server preview mode"
       ]
     },
-    confidence: 4.0,
     provisional: true,
     evidenceRef: "https://developers.google.com/tag-platform/tag-manager/server-side/api",
     constraints: [
@@ -165,7 +162,6 @@ export const customRules: Rule[] = [
         "Test template functionality in server preview mode"
       ]
     },
-    confidence: 5.5,
     provisional: true,
     evidenceRef: "https://developers.google.com/tag-platform/tag-manager/templates",
     constraints: [
@@ -220,7 +216,6 @@ export const customRules: Rule[] = [
         "Verify vendor accepts server-side requests (check User-Agent, IP restrictions)"
       ]
     },
-    confidence: 6.8,
     provisional: true,
     evidenceRef: "https://developers.google.com/tag-platform/tag-manager/server-side/send-requests",
     constraints: [
@@ -230,15 +225,7 @@ export const customRules: Rule[] = [
         message: "Pixel endpoint must use HTTPS"
       }
     ],
-    manualReview: [
-      {
-        trigger: "lowConfidence",
-        threshold: 7.0,
-        priority: "medium",
-        action: "Verify vendor accepts server-side requests. Test pixel delivery and confirm tracking is working."
-      }
-    ],
-    tags: ["custom", "pixel", "image", "http-request"]
+        tags: ["custom", "pixel", "image", "http-request"]
   },
   {
     id: "generic-http-request",
@@ -277,18 +264,9 @@ export const customRules: Rule[] = [
         "Handle rate limiting and error responses appropriately"
       ]
     },
-    confidence: 6.0,
     provisional: true,
     evidenceRef: "https://developers.google.com/tag-platform/tag-manager/server-side/send-requests",
-    manualReview: [
-      {
-        trigger: "lowConfidence",
-        threshold: 7.0,
-        priority: "medium",
-        action: "Review API endpoint requirements and authentication. Test server-side delivery and error handling."
-      }
-    ],
-    tags: ["custom", "http", "api", "generic"]
+        tags: ["custom", "http", "api", "generic"]
   },
   {
     id: "generic-fallback",
@@ -313,17 +291,8 @@ export const customRules: Rule[] = [
         "Engage vendor support for migration guidance"
       ]
     },
-    confidence: 5.0,
     provisional: true,
     evidenceRef: "https://developers.google.com/tag-platform/tag-manager/server-side",
-    manualReview: [
-      {
-        trigger: "lowConfidence",
-        threshold: 10.0,
-        priority: "high",
-        action: "No dedicated ruleset mapping available. Research vendor server-side capabilities and consult documentation."
-      }
-    ],
-    tags: ["fallback", "unknown", "requires-analysis"]
+        tags: ["fallback", "unknown", "requires-analysis"]
   }
 ];

@@ -66,20 +66,16 @@ function extractServerTagType(recommendation: string): string {
 }
 
 /**
- * Determine parity status based on confidence and provisional flags.
+ * Determine parity status from the provisional + missingRequired flags.
  */
 function determineParityStatus(mapping: MappingRecord): "match" | "review" | "gap" {
-  if (mapping.confidence >= 8.5 && !mapping.provisional) {
-    return "match";
-  }
-  if (mapping.confidence >= 6.0) {
-    return "review";
-  }
-  return "gap";
+  if (mapping.missingRequired) return "gap";
+  if (mapping.provisional) return "review";
+  return "match";
 }
 
 export function countWarnings(mappings: MappingRecord[]): number {
-  return mappings.filter((m) => m.provisional || m.confidence < 7).length;
+  return mappings.filter((m) => m.provisional || m.missingRequired).length;
 }
 
 /**
@@ -100,9 +96,9 @@ export function countByCategory(mappings: MappingRecord[]): Record<string, numbe
  */
 export function identifyHighRiskMappings(mappings: MappingRecord[]): MappingRecord[] {
   return mappings.filter(m =>
-    m.confidence < 5.0 ||
+    m.missingRequired ||
     m.manualActions.some(a => a.includes("[CRITICAL]")) ||
-    m.category === "custom" && m.confidence < 7.0
+    (m.category === "custom" && m.provisional)
   );
 }
 

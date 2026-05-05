@@ -6,6 +6,7 @@ import { ga4Rules } from "./rules-ga4.js";
 import { socialRules } from "./rules-social.js";
 import { adsRules } from "./rules-ads.js";
 import { customRules } from "./rules-custom.js";
+import { isSupportedClientTagType, SUPPORTED_CLIENT_TAG_TYPES } from "./supportedTypes.js";
 
 /**
  * Main ruleset engine - orchestrates rule matching, validation, and mapping generation.
@@ -39,18 +40,25 @@ export function applyRuleset(tags: CanonicalTag[]): MappingRecord[] {
   const mappings: MappingRecord[] = [];
 
   for (const tag of tags) {
+    const supported = isSupportedClientTagType(tag.type);
+
+    // Unsupported tag types short-circuit: analysis UI still shows the tag,
+    // but it cannot be approved or deployed.
+    if (!supported) {
+      mappings.push(createUnsupportedMapping(tag));
+      continue;
+    }
+
     const matchResult = findMatchingRule(tag, ruleset.rules);
 
     if (!matchResult.matched || !matchResult.rule) {
-      // No rule matched - should not happen due to fallback rule
       mappings.push(createFallbackMapping(tag));
       continue;
     }
 
     const rule = matchResult.rule;
-    const baseConfidence = rule.confidence;
-    const confidenceModifier = matchResult.confidenceModifier || 0;
-    const finalConfidence = Math.max(0, Math.min(10, baseConfidence + confidenceModifier));
+    const missingRequired = Boolean(matchResult.missingRequired);
+    const missingParameters = matchResult.missingParameters ?? [];
 
     // Validate constraints
     const validationResults = validateConstraints(tag, rule);
@@ -60,16 +68,24 @@ export function applyRuleset(tags: CanonicalTag[]): MappingRecord[] {
     const hasCriticalFailure = criticalFailures.length > 0;
 
     // Evaluate manual review conditions
-    const ruleManualActions = evaluateManualReview(tag, rule, finalConfidence, validationResults);
+    const ruleManualActions = evaluateManualReview(tag, rule, validationResults);
     const standardManualActions = generateStandardManualActions(
-      finalConfidence,
       validationResults,
-      rule.provisional
+      rule.provisional,
+      missingRequired
     );
 
     // Merge and deduplicate manual actions
     const allManualActions = [...ruleManualActions, ...standardManualActions];
     const uniqueManualActions = deduplicateManualActions(allManualActions);
+
+    const finalProvisional = rule.provisional || hasCriticalFailure;
+    const reviewReason = deriveReviewReason({
+      rule,
+      tagType: tag.type,
+      provisional: finalProvisional,
+      missingRequired
+    });
 
     // Build mapping record
     const mapping: MappingRecord = {
@@ -78,8 +94,11 @@ export function applyRuleset(tags: CanonicalTag[]): MappingRecord[] {
       clientTagType: tag.type,
       category: rule.category,
       serverRecommendation: buildServerRecommendation(rule, validationResults),
-      confidence: hasCriticalFailure ? Math.min(finalConfidence, 4.0) : finalConfidence,
-      provisional: rule.provisional || hasCriticalFailure || finalConfidence < 7.0,
+      provisional: finalProvisional,
+      missingRequired,
+      missingParameters,
+      supported: true,
+      reviewReason,
       evidence: {
         type: "docs",
         ref: rule.evidenceRef
@@ -132,14 +151,70 @@ function createFallbackMapping(tag: CanonicalTag): MappingRecord {
     clientTagType: tag.type,
     category: "unknown",
     serverRecommendation: "No matching rule found - manual analysis required",
-    confidence: 3.0,
     provisional: true,
+    missingRequired: false,
+    missingParameters: [],
+    supported: true,
+    reviewReason: "No ruleset match — manual analysis required",
     evidence: {
       type: "docs",
       ref: "https://developers.google.com/tag-platform/tag-manager/server-side"
     },
     manualActions: [
       "[CRITICAL] No ruleset mapping available - research vendor documentation and consult engineering support"
+    ]
+  };
+}
+
+/**
+ * Short human-readable reason for "Needs Review" when missingParameters alone
+ * doesn't explain it. We special-case Meta because that's the most common
+ * provisional path and its reason is specific and actionable.
+ */
+function deriveReviewReason(opts: {
+  rule: Rule;
+  tagType: string;
+  provisional: boolean;
+  missingRequired: boolean;
+}): string | null {
+  // Missing-required already surfaced as chips on the card; no need to repeat.
+  if (opts.missingRequired) return null;
+  if (!opts.provisional) return null;
+
+  // Meta Pixel community template (cvt_5RM3Q) — requires a CAPI access token.
+  if (opts.tagType === "cvt_5RM3Q" || opts.rule.category === "social") {
+    return "Provisional: Meta CAPI access token required at deploy";
+  }
+
+  return "Provisional mapping — verify in server container preview before publishing";
+}
+
+/**
+ * Mapping for tag types outside the supported whitelist. The tag still appears
+ * in the analysis view so the user sees what it is, but cannot be approved or
+ * deployed — only the 5 supported types pass the deploy endpoint guardrail.
+ */
+function createUnsupportedMapping(tag: CanonicalTag): MappingRecord {
+  return {
+    clientTagId: tag.tagId,
+    clientTagName: tag.name,
+    clientTagType: tag.type,
+    category: "unknown",
+    serverRecommendation:
+      `Tag type "${tag.type}" is not supported for automated migration. ` +
+      `Tag Relay currently supports: ${SUPPORTED_CLIENT_TAG_TYPES.join(", ")}. ` +
+      `Rebuild this tag manually in the server container or exclude it from the migration.`,
+    provisional: true,
+    missingRequired: false,
+    missingParameters: [],
+    supported: false,
+    reviewReason: `Tag type "${tag.type}" is not supported — manual rebuild required`,
+    evidence: {
+      type: "docs",
+      ref: "https://developers.google.com/tag-platform/tag-manager/server-side"
+    },
+    manualActions: [
+      `[CRITICAL] Unsupported tag type "${tag.type}" — cannot be auto-migrated. Manual rebuild required.`
     ]
   };
 }
@@ -163,56 +238,18 @@ function deduplicateManualActions(actions: Array<{ priority: string; reason: str
 }
 
 /**
- * Calculate aggregate confidence score across all mappings.
- * Weights higher-impact categories more heavily.
+ * Whether a run needs manual review: any mapping is unsupported, provisional,
+ * or missing a required parameter.
  */
-export function aggregateConfidence(mappings: MappingRecord[]): { score: number; provisional: boolean } {
-  if (mappings.length === 0) {
-    return { score: 0, provisional: true };
-  }
-
-  let sum = 0;
-  let sumW = 0;
-
-  for (const m of mappings) {
-    const w = getCategoryWeight(m.category);
-    sum += m.confidence * w;
-    sumW += w;
-  }
-
-  const score = Number(Math.min(10, sum / sumW).toFixed(2));
-  const provisional = mappings.some(m => m.provisional || m.confidence < 7.0);
-
-  return { score, provisional };
-}
-
-/**
- * Get category weight for confidence aggregation.
- * Higher-impact categories (ecommerce, analytics, conversion) get more weight.
- */
-function getCategoryWeight(category: MappingRecord["category"]): number {
-  switch (category) {
-    case "ecommerce":
-      return 1.3;
-    case "analytics":
-      return 1.2;
-    case "ads":
-      return 1.1;
-    case "social":
-      return 1.0;
-    case "consent":
-      return 1.4; // Compliance is critical
-    case "custom":
-      return 0.9;
-    case "unknown":
-      return 0.7;
-    default:
-      return 1.0;
-  }
+export function runNeedsReview(mappings: MappingRecord[]): boolean {
+  if (mappings.length === 0) return true;
+  return mappings.some(m => !m.supported || m.provisional || m.missingRequired);
 }
 
 /**
  * Export rule definitions for testing and documentation.
  */
 export { ga4Rules, socialRules, adsRules, customRules };
+export { SUPPORTED_CLIENT_TAG_TYPES, isSupportedClientTagType } from "./supportedTypes.js";
+export type { SupportedClientTagType } from "./supportedTypes.js";
 export type { Rule, Ruleset };

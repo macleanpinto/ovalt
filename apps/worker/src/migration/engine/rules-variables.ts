@@ -88,37 +88,11 @@ function categorizeVariable(varType: string): VariableMappingRecord["category"] 
 }
 
 /**
- * Determine confidence score for variable migration
- */
-function calculateVariableConfidence(
-  variable: CanonicalVariable,
-  strategy: ReturnType<typeof getVariableMigrationStrategy>
-): number {
-  // Automatic migrations get high confidence
-  if (strategy.strategy === "automatic") {
-    return 9.0;
-  }
-
-  // Manual rewrite needed but has server equivalent
-  if (strategy.strategy === "manual-rewrite") {
-    return 6.5;
-  }
-
-  // Client-only variables cannot be migrated
-  if (strategy.strategy === "client-only") {
-    return 2.0;
-  }
-
-  return 5.0;
-}
-
-/**
  * Generate manual actions for variable migration
  */
 function generateVariableManualActions(
   variable: CanonicalVariable,
-  strategy: ReturnType<typeof getVariableMigrationStrategy>,
-  confidence: number
+  strategy: ReturnType<typeof getVariableMigrationStrategy>
 ): string[] {
   const actions: string[] = [];
 
@@ -132,12 +106,6 @@ function generateVariableManualActions(
   if (strategy.strategy === "manual-rewrite") {
     actions.push(
       `[HIGH] Variable "${variable.name}" requires manual configuration on server-side. ${strategy.recommendation}`
-    );
-  }
-
-  if (confidence < 7.0) {
-    actions.push(
-      `[MEDIUM] Review variable "${variable.name}" configuration after migration to ensure correctness.`
     );
   }
 
@@ -168,9 +136,8 @@ function generateVariableManualActions(
  */
 export function applyVariableRules(variable: CanonicalVariable): VariableMappingRecord {
   const strategy = getVariableMigrationStrategy(variable.type);
-  const confidence = calculateVariableConfidence(variable, strategy);
   const category = categorizeVariable(variable.type);
-  const manualActions = generateVariableManualActions(variable, strategy, confidence);
+  const manualActions = generateVariableManualActions(variable, strategy);
 
   let serverRecommendation = strategy.recommendation;
 
@@ -198,8 +165,7 @@ export function applyVariableRules(variable: CanonicalVariable): VariableMapping
     serverRecommendation,
     canAutoMigrate: strategy.strategy === "automatic",
     serverVariableType: strategy.serverType,
-    confidence,
-    provisional: confidence < 7.0 || strategy.strategy !== "automatic",
+    provisional: strategy.strategy !== "automatic",
     manualActions
   };
 }
@@ -212,26 +178,23 @@ export function applyVariableRuleset(variables: CanonicalVariable[]): VariableMa
 }
 
 /**
- * Calculate aggregate confidence for variable migrations
+ * Aggregate variable migration stats.
  */
-export function aggregateVariableConfidence(mappings: VariableMappingRecord[]): {
-  score: number;
+export function aggregateVariableStats(mappings: VariableMappingRecord[]): {
   provisional: boolean;
   autoMigratable: number;
   manualRequired: number;
   clientOnly: number;
 } {
   if (mappings.length === 0) {
-    return { score: 10, provisional: false, autoMigratable: 0, manualRequired: 0, clientOnly: 0 };
+    return { provisional: false, autoMigratable: 0, manualRequired: 0, clientOnly: 0 };
   }
 
-  let sum = 0;
   let autoMigratable = 0;
   let manualRequired = 0;
   let clientOnly = 0;
 
   for (const m of mappings) {
-    sum += m.confidence;
     if (m.canAutoMigrate) {
       autoMigratable++;
     } else if (m.serverVariableType !== null) {
@@ -241,8 +204,7 @@ export function aggregateVariableConfidence(mappings: VariableMappingRecord[]): 
     }
   }
 
-  const score = Number((sum / mappings.length).toFixed(2));
   const provisional = mappings.some(m => m.provisional);
 
-  return { score, provisional, autoMigratable, manualRequired, clientOnly };
+  return { provisional, autoMigratable, manualRequired, clientOnly };
 }

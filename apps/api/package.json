@@ -10,8 +10,6 @@
     "setup:ovalt-gtm:auth": "node scripts/setup-ovalt-gtm-engagement.mjs --authorize",
     "setup:ovalt-gtm:auth:save": "node scripts/setup-ovalt-gtm-engagement.mjs --authorize --write-env",
     "test:e2e": "node scripts/run-e2e-with-oauth.mjs",
-    "test:api-e2e": "bash run-api-e2e-test.sh",
-    "test:e2e-publish": "npm test -- complete-e2e-with-publish.test.ts",
     "test:browser-e2e": "npm test -- browser-e2e-test.test.ts",
     "dev": "tsx watch src/index.ts",
     "dev:test": "NODE_ENV=test tsx watch src/index.ts",

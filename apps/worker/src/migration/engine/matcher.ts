@@ -117,32 +117,29 @@ export function evaluateRule(tag: CanonicalTag, rule: Rule): RuleMatchResult {
     return { matched: false };
   }
 
-  // Calculate confidence modifier based on parameter completeness
-  let confidenceModifier = 0;
+  // Flag when required parameters are missing on the source tag.
+  // Surface the specific client-param names so the UI can ask the user to fill them in.
   const paramMappings = rule.transform.parameterMappings || [];
   const requiredParams = paramMappings.filter(pm => pm.required);
-
-  if (requiredParams.length > 0) {
-    const foundRequired = requiredParams.filter(pm =>
-      pm.clientParam in tag.parameters || tag.rawParameterKeys.includes(pm.clientParam)
-    );
-
-    if (foundRequired.length < requiredParams.length) {
-      // Missing required parameters - reduce confidence
-      confidenceModifier = -1.5;
-    } else {
-      // All required parameters present - slight boost
-      confidenceModifier = 0.3;
-    }
-  }
+  const missingParameters = requiredParams
+    .filter(pm => {
+      const raw = tag.parameters[pm.clientParam];
+      const present = (pm.clientParam in tag.parameters || tag.rawParameterKeys.includes(pm.clientParam))
+        && typeof raw === "string"
+        && raw.trim().length > 0;
+      return !present;
+    })
+    .map(pm => pm.clientParam);
+  const missingRequired = missingParameters.length > 0;
 
   return {
     matched: true,
     rule,
-    confidenceModifier,
+    missingRequired,
+    missingParameters,
     matchContext: {
       matchedConditions: rule.matchConditions.length,
-      hasRequiredParams: requiredParams.length === 0 || confidenceModifier >= 0
+      hasRequiredParams: !missingRequired
     }
   };
 }

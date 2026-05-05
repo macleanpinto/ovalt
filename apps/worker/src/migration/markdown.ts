@@ -13,9 +13,9 @@ export function reportToMarkdown(r: MigrationReportPayload): string {
   lines.push("");
   lines.push(r.executiveSummary);
   lines.push("");
-  lines.push(`## Confidence`);
+  lines.push(`## Review status`);
   lines.push("");
-  lines.push(`**${r.confidenceScore}/10**${r.provisional ? " (provisional)" : ""}`);
+  lines.push(r.needsReview ? "**Needs review** — provisional or incomplete mappings present." : "**Ready** — all mappings vendor-documented and complete.");
   lines.push("");
   lines.push(`## Summary counts`);
   lines.push("");

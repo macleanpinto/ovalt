@@ -4,11 +4,9 @@ Comprehensive type-based mapping registry for migrating Google Tag Manager confi
 
 ## Overview
 
-This module provides **TYPE-BASED** mappings (never name-based pattern matching) for:
+This module provides **TYPE-BASED** mappings (never name-based pattern matching) for tags, triggers, and variables. It is the reference registry used by `apps/api/src/gtm-migration-deploy.ts` when translating client-side GTM entities into server-side equivalents.
 
-- **Tags**: 35+ tag types across Google Analytics, Ads, Social (Meta, TikTok, etc.), and Analytics platforms
-- **Triggers**: 20+ trigger types including pageviews, custom events, clicks, forms, etc.
-- **Variables**: 25+ variable types including Data Layer, cookies, constants, lookup tables, etc.
+Note: the rule engine in `apps/worker/src/migration/engine/` restricts auto-deployment to a short whitelist of client tag types (see `supportedTypes.ts`). This registry still lists broader type metadata for analysis/reporting; only whitelisted types actually flow through the deploy path.
 
 ## Usage
 

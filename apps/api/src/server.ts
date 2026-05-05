@@ -42,6 +42,7 @@ import {
   getOrganizationId,
   type OAuthProviderConfig
 } from "./auth/index.js";
+import { registerAdminRoutes } from "./admin-routes.js";
 
 // Env schema - will be parsed inside buildApp() after secrets are loaded
 const envSchema = z.object({
@@ -283,6 +284,13 @@ const emailService = new EmailService({
 registerAuthRoutes(app, authService);
 registerMembersRoutes(app, authService, emailService);
 registerOAuthRoutes(app, authService, oauthService);
+registerAdminRoutes(app, {
+  ddb: ddbDoc,
+  usersTable: env.DDB_TABLE_USERS,
+  organizationsTable: env.DDB_TABLE_ORGANIZATIONS,
+  importsTable: env.DDB_TABLE_IMPORTS,
+  runsTable: env.DDB_TABLE_RUNS
+});
 
 type GtmSession = {
   sessionId: string;
@@ -1245,7 +1253,6 @@ app.post("/migrations/:importId/run", async (req, reply) => {
         status: "queued",
         rulesetVersion: parsed.data.rulesetVersion,
         containerProvisioningStatus: "pending",
-        confidenceScore: null,
         summaryCounts: { mappings: 0, warnings: 0, manualActions: 0 },
         createdAt: now,
         updatedAt: now
@@ -1359,7 +1366,7 @@ app.get("/migrations/:runId/report", async (req, reply) => {
   return {
     runId,
     executiveSummary: "Migration report not available yet, or the worker run failed before writing artifacts.",
-    confidenceScore: run.Item.confidenceScore ?? 0,
+    needsReview: run.Item.status === "needs_review",
     complianceFlags: { notes: [], piiRisk: "low", consentModeRecommended: true, piiFieldsSample: [] },
     manualActions: run.Item.manualActions ?? [],
     parityMatrix: [],
@@ -1468,7 +1475,8 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     clientWorkspacePath,
     serverContainerPath,
     transport_url,
-    metaAccessToken
+    metaAccessToken,
+    parameterOverrides
   } = req.body as {
     approvedTagIds: string[];
     clientContainerPath: string;
@@ -1476,6 +1484,8 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     serverContainerPath: string;
     transport_url: string;
     metaAccessToken?: string;
+    /** Per-tag client-parameter overrides: { [tagId]: { [paramName]: stringValue } } */
+    parameterOverrides?: Record<string, Record<string, string>>;
   };
 
   // Validate required fields
@@ -1523,12 +1533,75 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
     return reply.code(400).send({ message: "No valid tags found for approved IDs" });
   }
 
+  // Guardrail: only the 5 supported client tag types may be deployed. Anything
+  // else is rejected at the API boundary even if the UI check was bypassed.
+  const SUPPORTED_CLIENT_TAG_TYPES = ['gaawe', 'googtag', 'awct', 'gclidw', 'cvt_5RM3Q'];
+  const unsupportedTags = approvedTags.filter(t => !SUPPORTED_CLIENT_TAG_TYPES.includes(t.type));
+  if (unsupportedTags.length > 0) {
+    return reply.code(400).send({
+      message:
+        `Unsupported tag types in deployment request: ${unsupportedTags.map(t => `${t.name} (${t.type})`).join(", ")}. ` +
+        `Supported types: ${SUPPORTED_CLIENT_TAG_TYPES.join(", ")}.`,
+      unsupportedTagIds: unsupportedTags.map(t => t.tagId)
+    });
+  }
+
+  // Validate parameterOverrides (optional — the UI sends these when the user
+  // filled in missing required params in the Review & Deploy modal).
+  // Rules: (a) every overridden tagId must be in approvedTagIds, (b) each
+  // param name must be in the whitelist of required params for that tag type,
+  // (c) values are non-empty strings <= 1024 chars.
+  const ALLOWED_OVERRIDE_PARAMS_BY_TYPE: Record<string, string[]> = {
+    gaawe: ['eventName'],
+    googtag: ['tagId'],
+    awct: ['conversionId', 'conversionLabel'],
+    gclidw: [],
+    cvt_5RM3Q: []
+  };
+  let sanitizedOverrides: Record<string, Record<string, string>> = {};
+  if (parameterOverrides && typeof parameterOverrides === 'object') {
+    const approvedIdSet = new Set(approvedTagIds);
+    for (const [tagId, params] of Object.entries(parameterOverrides)) {
+      if (!approvedIdSet.has(tagId)) {
+        return reply.code(400).send({
+          message: `parameterOverrides references tag ${tagId} which is not in approvedTagIds`
+        });
+      }
+      const tag = containerTagsMap.get(tagId);
+      if (!tag) {
+        return reply.code(400).send({
+          message: `parameterOverrides references unknown tag ${tagId}`
+        });
+      }
+      const allowed = ALLOWED_OVERRIDE_PARAMS_BY_TYPE[tag.type] ?? [];
+      const cleaned: Record<string, string> = {};
+      for (const [paramName, raw] of Object.entries(params ?? {})) {
+        if (!allowed.includes(paramName)) {
+          return reply.code(400).send({
+            message:
+              `parameterOverrides for tag ${tagId} (${tag.type}) cannot set "${paramName}". ` +
+              `Allowed: ${allowed.length ? allowed.join(', ') : '(none)'}.`
+          });
+        }
+        if (typeof raw !== 'string' || raw.trim().length === 0 || raw.length > 1024) {
+          return reply.code(400).send({
+            message: `parameterOverrides[${tagId}][${paramName}] must be a non-empty string up to 1024 chars`
+          });
+        }
+        cleaned[paramName] = raw.trim();
+      }
+      if (Object.keys(cleaned).length > 0) {
+        sanitizedOverrides[tagId] = cleaned;
+      }
+    }
+  }
+
   // Group tags by category for consolidation
   function getTagCategory(tagType: string): string | null {
-    if (['gaawe', 'googtag', 'gaawc'].includes(tagType)) return 'ga4';
-    if (['awct', 'sp'].includes(tagType)) return 'googads';
-    if (tagType.startsWith('cvt_')) return 'meta'; // Custom Variable Template (Meta Pixel)
-    if (tagType === 'gclidw') return 'conversionlinker'; // Google Ads Conversion Linker
+    if (tagType === 'gaawe' || tagType === 'googtag') return 'ga4';
+    if (tagType === 'awct') return 'googads';
+    if (tagType === 'gclidw') return 'conversionlinker';
+    if (tagType === 'cvt_5RM3Q') return 'meta';
     return null;
   }
 
@@ -1545,7 +1618,8 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
 
   app.log.info({
     approvedCount: approvedTags.length,
-    categories: Array.from(tagsByCategory.keys())
+    categories: Array.from(tagsByCategory.keys()),
+    overrideTagCount: Object.keys(sanitizedOverrides).length
   }, 'Starting async deployment');
 
   // Mark deployment as in-progress
@@ -1576,7 +1650,8 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
           serverContainerUrl: transport_url,
           approvedTagIds,
           tagsByCategory: Object.fromEntries(tagsByCategory),
-          metaAccessToken
+          metaAccessToken,
+          parameterOverrides: sanitizedOverrides
         }
       })
     })

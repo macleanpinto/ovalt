@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
-type CustomerType = 'freelancer' | 'agency' | 'enterprise';
+type CustomerType = 'freelancer' | 'agency';
 
 export default function PricingPage() {
   const [customerType, setCustomerType] = useState<CustomerType>('freelancer');
@@ -32,12 +32,6 @@ export default function PricingPage() {
       xl: 'Custom',
     },
   };
-
-  const freelancerAddons = [
-    { name: 'Extra platform on same project', price: '+€25', description: 'Add another platform to your migration' },
-    { name: 'Priority processing', price: '+€19', description: 'Get your migration completed within 24 hours' },
-    { name: 'White-label export/report', price: '+€15', description: 'Branded deployment report for your clients' },
-  ];
 
   const agencyPlans = [
     {
@@ -124,7 +118,7 @@ export default function PricingPage() {
           </h1>
 
           <p className="font-['Inter'] text-[16px] sm:text-[18px] leading-[1.6] text-[#bacbbe] max-w-[600px] mx-auto px-4">
-            From freelancers to enterprises. Choose the plan that fits your workflow.
+            For freelancers and agencies. Choose the plan that fits your workflow.
           </p>
         </section>
 
@@ -152,17 +146,6 @@ export default function PricingPage() {
             >
               <span className="material-symbols-outlined text-base sm:text-lg align-middle mr-2">groups</span>
               Agencies
-            </button>
-            <button
-              onClick={() => setCustomerType('enterprise')}
-              className={`px-6 sm:px-8 py-3 sm:py-4 rounded-xl font-['Space_Grotesk'] text-[12px] sm:text-[14px] tracking-[0.05em] font-medium transition-all active:scale-95 ${
-                customerType === 'enterprise'
-                  ? 'bg-[#41FFAF] text-[#131313]'
-                  : 'bg-[#20201f] text-[#bacbbe] border border-white/5 hover:border-[#41FFAF]/30'
-              }`}
-            >
-              <span className="material-symbols-outlined text-base sm:text-lg align-middle mr-2">business</span>
-              Enterprise
             </button>
           </div>
         </section>
@@ -335,33 +318,6 @@ export default function PricingPage() {
               </div>
             </section>
 
-            {/* Add-ons */}
-            <section className="mb-12 sm:mb-16">
-              <h2 className="font-['Inter'] text-[24px] sm:text-[28px] md:text-[32px] leading-[1.3] font-semibold text-[#e5e2e1] mb-6 sm:mb-8">
-                Optional Add-ons
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-                {freelancerAddons.map((addon, index) => (
-                  <div
-                    key={index}
-                    className="bg-[#20201f] p-6 sm:p-8 rounded-xl border border-white/5 hover:border-[#41FFAF]/30 transition-all"
-                  >
-                    <div className="flex items-start justify-between mb-3 sm:mb-4">
-                      <span className="material-symbols-outlined text-[#41FFAF] text-xl sm:text-2xl">add_circle</span>
-                      <span className="font-['Inter'] text-[18px] sm:text-[20px] font-bold text-[#41FFAF]">
-                        {addon.price}
-                      </span>
-                    </div>
-                    <h3 className="font-['Inter'] text-[16px] sm:text-[18px] font-semibold text-[#e5e2e1] mb-2">
-                      {addon.name}
-                    </h3>
-                    <p className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe] leading-relaxed">
-                      {addon.description}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
           </>
         )}
 
@@ -432,7 +388,7 @@ export default function PricingPage() {
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="material-symbols-outlined text-[#41FFAF] text-sm">deployment</span>
+                          <span className="material-symbols-outlined text-[#41FFAF] text-sm">rocket_launch</span>
                           <span className="font-['Inter'] text-[13px] sm:text-[14px] text-[#e5e2e1]">
                             {plan.onboardings} client onboardings/mo
                           </span>
@@ -494,134 +450,6 @@ export default function PricingPage() {
           </>
         )}
 
-        {/* ENTERPRISE PRICING */}
-        {customerType === 'enterprise' && (
-          <>
-            {/* Target Audience */}
-            <section className="mb-16 bg-[#20201f] p-8 rounded-xl border border-white/5">
-              <div className="flex items-start gap-4">
-                <span className="material-symbols-outlined text-[#41FFAF] text-3xl">business</span>
-                <div>
-                  <h2 className="font-['Inter'] text-[24px] leading-[1.3] font-semibold text-[#e5e2e1] mb-3">
-                    Enterprise Solutions
-                  </h2>
-                  <p className="font-['Inter'] text-[16px] leading-[1.5] text-[#bacbbe] mb-4">
-                    API-based provisioning, volume commitments, SLAs, dedicated support, and custom implementation.
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="px-3 py-1 bg-[#353535] rounded-full font-['Space_Grotesk'] text-[12px] tracking-[0.1em] font-medium text-[#bacbbe]">
-                      API access
-                    </span>
-                    <span className="px-3 py-1 bg-[#353535] rounded-full font-['Space_Grotesk'] text-[12px] tracking-[0.1em] font-medium text-[#bacbbe]">
-                      Custom SLA
-                    </span>
-                    <span className="px-3 py-1 bg-[#353535] rounded-full font-['Space_Grotesk'] text-[12px] tracking-[0.1em] font-medium text-[#bacbbe]">
-                      Dedicated support
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* Enterprise Features */}
-            <section className="mb-12 sm:mb-16">
-              <div className="bg-[#20201f] rounded-xl border border-white/5 p-6 sm:p-8 md:p-12">
-                <div className="max-w-[800px] mx-auto">
-                  <h2 className="font-['Inter'] text-[32px] sm:text-[40px] md:text-[48px] leading-[1.1] font-bold text-[#e5e2e1] mb-4 sm:mb-6 text-center">
-                    Enterprise API
-                  </h2>
-                  <p className="font-['Inter'] text-[15px] sm:text-[16px] md:text-[18px] text-[#bacbbe] text-center mb-8 sm:mb-12 px-4">
-                    High-volume server-side migration with API-driven provisioning
-                  </p>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8 mb-8 sm:mb-12">
-                    <div className="flex items-start gap-3 sm:gap-4">
-                      <span className="material-symbols-outlined text-[#41FFAF] text-xl sm:text-2xl shrink-0">api</span>
-                      <div>
-                        <h3 className="font-['Inter'] text-[16px] sm:text-[18px] font-semibold text-[#e5e2e1] mb-2">
-                          API Integration
-                        </h3>
-                        <p className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe] leading-relaxed">
-                          Programmatic access for bulk onboarding and automated deployments
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-3 sm:gap-4">
-                      <span className="material-symbols-outlined text-[#41FFAF] text-xl sm:text-2xl shrink-0">speed</span>
-                      <div>
-                        <h3 className="font-['Inter'] text-[16px] sm:text-[18px] font-semibold text-[#e5e2e1] mb-2">
-                          Volume Commitments
-                        </h3>
-                        <p className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe] leading-relaxed">
-                          150–500+ monthly connections with predictable pricing
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-3 sm:gap-4">
-                      <span className="material-symbols-outlined text-[#41FFAF] text-xl sm:text-2xl shrink-0">verified</span>
-                      <div>
-                        <h3 className="font-['Inter'] text-[16px] sm:text-[18px] font-semibold text-[#e5e2e1] mb-2">
-                          Custom SLA
-                        </h3>
-                        <p className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe] leading-relaxed">
-                          Guaranteed uptime, response times, and dedicated support
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-3 sm:gap-4">
-                      <span className="material-symbols-outlined text-[#41FFAF] text-xl sm:text-2xl shrink-0">security</span>
-                      <div>
-                        <h3 className="font-['Inter'] text-[16px] sm:text-[18px] font-semibold text-[#e5e2e1] mb-2">
-                          Security & Compliance
-                        </h3>
-                        <p className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe] leading-relaxed">
-                          SOC 2, GDPR compliance, dedicated infrastructure
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#1c1b1b] rounded-xl p-6 sm:p-8 border border-white/5 mb-6 sm:mb-8">
-                    <h3 className="font-['Inter'] text-[15px] sm:text-[16px] font-semibold text-[#e5e2e1] mb-3 sm:mb-4">
-                      Enterprise Volume Framework
-                    </h3>
-                    <div className="space-y-3">
-                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 sm:gap-4">
-                        <span className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe]">Up to 150 connections/month</span>
-                        <span className="font-['Inter'] text-[15px] sm:text-[16px] font-semibold text-[#41FFAF] whitespace-nowrap">from €1,950/mo</span>
-                      </div>
-                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 sm:gap-4">
-                        <span className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe]">Up to 200 connections/month</span>
-                        <span className="font-['Inter'] text-[15px] sm:text-[16px] font-semibold text-[#41FFAF] whitespace-nowrap">from €2,450/mo</span>
-                      </div>
-                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 sm:gap-4">
-                        <span className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe]">Up to 500 connections/month</span>
-                        <span className="font-['Inter'] text-[15px] sm:text-[16px] font-semibold text-[#41FFAF] whitespace-nowrap">from €4,900/mo</span>
-                      </div>
-                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 sm:gap-4 pt-3 border-t border-white/5">
-                        <span className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe]">500+ / Custom infrastructure</span>
-                        <span className="font-['Inter'] text-[15px] sm:text-[16px] font-semibold text-[#bacbbe] whitespace-nowrap">Custom pricing</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="text-center">
-                    <a
-                      href="mailto:enterprise@ovalt.org"
-                      className="inline-block bg-[#41FFAF] text-[#131313] px-8 sm:px-12 py-3 sm:py-4 rounded-lg font-['Space_Grotesk'] text-[12px] sm:text-[14px] tracking-[0.05em] font-medium uppercase active:scale-95 transition-transform"
-                    >
-                      CONTACT SALES
-                    </a>
-                    <p className="mt-3 sm:mt-4 font-['Inter'] text-[12px] sm:text-[14px] text-[#bacbbe] px-4">
-                      Annual contracts preferred • Onboarding/implementation from €1,500
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </>
-        )}
-
         {/* What's Included (Common) */}
         <section className="mb-12 sm:mb-16 bg-[#20201f] p-6 sm:p-8 md:p-12 rounded-xl border border-white/5">
           <h2 className="font-['Inter'] text-[24px] sm:text-[28px] md:text-[32px] leading-[1.3] font-semibold text-[#e5e2e1] mb-6 sm:mb-8 text-center">
@@ -643,10 +471,10 @@ export default function PricingPage() {
               <span className="material-symbols-outlined text-[#41FFAF] text-xl sm:text-2xl shrink-0">check_circle</span>
               <div>
                 <h3 className="font-['Inter'] text-[15px] sm:text-[16px] font-semibold text-[#e5e2e1] mb-1">
-                  Confidence Scoring
+                  Review Flagging
                 </h3>
                 <p className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe] leading-relaxed">
-                  Know exactly which tags are ready for production
+                  Provisional or incomplete mappings are flagged for review before deploy
                 </p>
               </div>
             </div>
@@ -687,10 +515,10 @@ export default function PricingPage() {
               <span className="material-symbols-outlined text-[#41FFAF] text-xl sm:text-2xl shrink-0">check_circle</span>
               <div>
                 <h3 className="font-['Inter'] text-[15px] sm:text-[16px] font-semibold text-[#e5e2e1] mb-1">
-                  {customerType === 'enterprise' ? 'Dedicated Support' : customerType === 'agency' ? 'Priority Support' : 'Email Support'}
+                  {customerType === 'agency' ? 'Priority Support' : 'Email Support'}
                 </h3>
                 <p className="font-['Inter'] text-[13px] sm:text-[14px] text-[#bacbbe] leading-relaxed">
-                  {customerType === 'enterprise' ? 'Dedicated support team with custom SLA' : customerType === 'agency' ? 'Priority email and chat support' : 'Get help within 24 hours via email'}
+                  {customerType === 'agency' ? 'Priority email and chat support' : 'Get help within 24 hours via email'}
                 </p>
               </div>
             </div>
@@ -703,29 +531,16 @@ export default function PricingPage() {
             Ready to migrate?
           </h2>
           <p className="text-[#003822] font-['Inter'] text-[15px] sm:text-[16px] md:text-[18px] leading-[1.6] max-w-[500px] mx-auto mb-6 sm:mb-8 px-4">
-            {customerType === 'enterprise'
-              ? 'Contact our sales team to discuss your custom enterprise requirements.'
-              : 'Import your container and see the exact pricing for your project.'}
+            Import your container and see the exact pricing for your project.
           </p>
-          {customerType === 'enterprise' ? (
-            <a
-              href="mailto:enterprise@ovalt.org"
-              className="inline-block bg-[#131313] text-white px-8 sm:px-12 py-3 sm:py-4 rounded-lg font-['Space_Grotesk'] text-[12px] sm:text-[14px] tracking-[0.05em] font-medium uppercase active:scale-95 transition-transform"
-            >
-              CONTACT SALES
-            </a>
-          ) : (
-            <Link
-              href="/dashboard"
-              className="inline-block bg-[#131313] text-white px-8 sm:px-12 py-3 sm:py-4 rounded-lg font-['Space_Grotesk'] text-[12px] sm:text-[14px] tracking-[0.05em] font-medium uppercase active:scale-95 transition-transform"
-            >
-              {customerType === 'agency' ? 'START FREE TRIAL' : 'IMPORT CONTAINER'}
-            </Link>
-          )}
+          <Link
+            href="/dashboard"
+            className="inline-block bg-[#131313] text-white px-8 sm:px-12 py-3 sm:py-4 rounded-lg font-['Space_Grotesk'] text-[12px] sm:text-[14px] tracking-[0.05em] font-medium uppercase active:scale-95 transition-transform"
+          >
+            {customerType === 'agency' ? 'START FREE TRIAL' : 'IMPORT CONTAINER'}
+          </Link>
           <p className="mt-4 sm:mt-6 text-[#003822]/60 font-['Inter'] text-[12px] sm:text-[14px] px-4">
-            {customerType === 'enterprise'
-              ? 'Custom onboarding • SLA guarantees • Dedicated support'
-              : 'No credit card required • See pricing before you commit'}
+            No credit card required • See pricing before you commit
           </p>
         </section>
       </main>

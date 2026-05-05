@@ -1,360 +1,236 @@
 import { describe, it, expect } from "vitest";
-import { applyRuleset, aggregateConfidence, loadRuleset } from "./index.js";
+import { applyRuleset, runNeedsReview, loadRuleset, SUPPORTED_CLIENT_TAG_TYPES, isSupportedClientTagType } from "./index.js";
 import type { CanonicalTag } from "../types.js";
 
 describe("Ruleset Engine", () => {
   describe("loadRuleset", () => {
     it("should load ruleset with all rules", () => {
       const ruleset = loadRuleset();
-
       expect(ruleset.version).toBe("2.0.0");
       expect(ruleset.rules.length).toBeGreaterThan(20);
       expect(ruleset.name).toBe("Tag Relay Core Ruleset");
     });
 
-    it("should have rules sorted by priority implicitly", () => {
+    it("should have high-priority rules", () => {
       const ruleset = loadRuleset();
-
-      // Check that high-priority rules exist
       const highPriorityRules = ruleset.rules.filter(r => r.priority && r.priority >= 900);
       expect(highPriorityRules.length).toBeGreaterThan(5);
     });
   });
 
-  describe("GA4 Rules", () => {
-    it("should match Google Tag with high confidence", () => {
+  describe("Supported tag-type whitelist", () => {
+    it("exposes the five supported client tag types", () => {
+      expect(SUPPORTED_CLIENT_TAG_TYPES).toEqual([
+        "gaawe",
+        "googtag",
+        "awct",
+        "gclidw",
+        "cvt_5RM3Q"
+      ]);
+    });
+
+    it.each(["gaawe", "googtag", "awct", "gclidw", "cvt_5RM3Q"])(
+      "isSupportedClientTagType(%s) === true",
+      type => {
+        expect(isSupportedClientTagType(type)).toBe(true);
+      }
+    );
+
+    it.each(["html", "img", "gaawc", "ua", "cvt_other_template", "unknown_vendor"])(
+      "isSupportedClientTagType(%s) === false",
+      type => {
+        expect(isSupportedClientTagType(type)).toBe(false);
+      }
+    );
+  });
+
+  describe("Supported client tag types", () => {
+    it("maps googtag as supported analytics and non-provisional", () => {
       const tag: CanonicalTag = {
         tagId: "1",
         name: "GA4 Configuration",
         type: "googtag",
         firingTriggerIds: ["2"],
-        parameters: {
-          tagId: "G-XXXXXXXXXX"
-        },
+        parameters: { tagId: "G-XXXXXXXXXX" },
         rawParameterKeys: ["tagId"]
       };
 
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("analytics");
-      expect(mappings[0].confidence).toBeGreaterThan(9.0);
-      expect(mappings[0].provisional).toBe(false);
-      expect(mappings[0].serverRecommendation).toContain("GA4");
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.supported).toBe(true);
+      expect(mapping.category).toBe("analytics");
+      expect(mapping.provisional).toBe(false);
+      expect(mapping.missingRequired).toBe(false);
     });
 
-    it("should match GA4 event tag", () => {
+    it("maps gaawe as supported analytics", () => {
       const tag: CanonicalTag = {
         tagId: "2",
         name: "GA4 Custom Event",
         type: "gaawe",
         firingTriggerIds: ["3"],
-        parameters: {
-          eventName: "user_engagement",
-          eventParameters: "engagement_time_msec=100"
-        },
-        rawParameterKeys: ["eventName", "eventParameters"]
+        parameters: { eventName: "user_engagement" },
+        rawParameterKeys: ["eventName"]
       };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("analytics");
-      expect(mappings[0].confidence).toBeGreaterThanOrEqual(8.0);
-      expect(mappings[0].serverRecommendation).toContain("event");
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.supported).toBe(true);
+      expect(mapping.category).toBe("analytics");
     });
 
-    it("should match GA4 purchase event with high confidence", () => {
-      const tag: CanonicalTag = {
-        tagId: "3",
-        name: "Purchase Event",
-        type: "gaawe",
-        firingTriggerIds: ["4"],
-        parameters: {
-          eventName: "purchase",
-          transaction_id: "TXN123",
-          value: "99.99",
-          currency: "USD",
-          items: "[...]"
-        },
-        rawParameterKeys: ["eventName", "transaction_id", "value", "currency", "items"]
-      };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("ecommerce");
-      expect(mappings[0].confidence).toBeGreaterThanOrEqual(8.5);
-      expect(mappings[0].serverRecommendation).toContain("purchase");
-    });
-  });
-
-  describe("Social Media Rules", () => {
-    it("should match Meta Pixel with provisional confidence", () => {
-      const tag: CanonicalTag = {
-        tagId: "10",
-        name: "Facebook Pixel",
-        type: "html",
-        firingTriggerIds: ["11"],
-        parameters: {
-          html: "fbq('track', 'PageView')"
-        },
-        rawParameterKeys: ["html"]
-      };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      // Should match custom HTML rule, not Meta rule (since no explicit Meta type)
-      expect(mappings[0].confidence).toBeLessThan(7.0);
-      expect(mappings[0].provisional).toBe(true);
-    });
-
-    it("should identify Meta Pixel from tag name pattern", () => {
-      const tag: CanonicalTag = {
-        tagId: "12",
-        name: "Meta Pixel - Purchase",
-        type: "custom_meta_pixel",
-        firingTriggerIds: ["13"],
-        parameters: {
-          pixelId: "123456789",
-          eventName: "Purchase",
-          value: "100.00"
-        },
-        rawParameterKeys: ["pixelId", "eventName", "value"]
-      };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("social");
-      expect(mappings[0].serverRecommendation).toContain("Meta");
-    });
-  });
-
-  describe("Ads Rules", () => {
-    it("should match Google Ads conversion tag", () => {
+    it("maps awct as supported ads", () => {
       const tag: CanonicalTag = {
         tagId: "20",
         name: "Google Ads Conversion",
         type: "awct",
         firingTriggerIds: ["21"],
-        parameters: {
-          conversionId: "AW-123456789",
-          conversionLabel: "abcd1234"
-        },
+        parameters: { conversionId: "AW-123456789", conversionLabel: "abcd1234" },
         rawParameterKeys: ["conversionId", "conversionLabel"]
       };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("ads");
-      expect(mappings[0].confidence).toBeGreaterThanOrEqual(8.5);
-      expect(mappings[0].serverRecommendation).toContain("Google Ads");
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.supported).toBe(true);
+      expect(mapping.category).toBe("ads");
     });
 
-    it("should flag missing required parameters", () => {
+    it("flags awct missingRequired when conversionLabel is absent and surfaces the param name", () => {
       const tag: CanonicalTag = {
         tagId: "22",
         name: "Google Ads Conversion - Incomplete",
         type: "awct",
         firingTriggerIds: ["23"],
-        parameters: {
-          conversionId: "AW-123456789"
-          // Missing conversionLabel
-        },
+        parameters: { conversionId: "AW-123456789" },
         rawParameterKeys: ["conversionId"]
       };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].confidence).toBeLessThan(8.8); // Reduced due to missing param
-      expect(mappings[0].manualActions.length).toBeGreaterThan(0);
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.supported).toBe(true);
+      expect(mapping.missingRequired).toBe(true);
+      expect(mapping.missingParameters).toEqual(["conversionLabel"]);
     });
-  });
 
-  describe("Custom Tag Rules", () => {
-    it("should handle custom HTML with low confidence", () => {
+    it("flags googtag with empty tagId as missingRequired: [tagId]", () => {
       const tag: CanonicalTag = {
-        tagId: "30",
-        name: "Custom Script",
-        type: "html",
-        firingTriggerIds: ["31"],
-        parameters: {
-          html: "<script>console.log('test')</script>"
-        },
-        rawParameterKeys: ["html"]
+        tagId: "7",
+        name: "GA4 (empty)",
+        type: "googtag",
+        firingTriggerIds: [],
+        parameters: { tagId: "   " },
+        rawParameterKeys: ["tagId"]
       };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("custom");
-      expect(mappings[0].confidence).toBeLessThanOrEqual(4.0);
-      expect(mappings[0].provisional).toBe(true);
-      expect(mappings[0].manualActions.some(a => a.includes("CRITICAL"))).toBe(true);
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.missingRequired).toBe(true);
+      expect(mapping.missingParameters).toEqual(["tagId"]);
     });
 
-    it("should handle community template tags", () => {
+    it("lists empty missingParameters when all required params present", () => {
       const tag: CanonicalTag = {
-        tagId: "32",
-        name: "Custom Template Tag",
-        type: "cvt_custom_template",
-        firingTriggerIds: ["33"],
+        tagId: "8",
+        name: "GA4 with id",
+        type: "googtag",
+        firingTriggerIds: [],
+        parameters: { tagId: "G-XXXX" },
+        rawParameterKeys: ["tagId"]
+      };
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.missingRequired).toBe(false);
+      expect(mapping.missingParameters).toEqual([]);
+    });
+
+    it("maps cvt_5RM3Q (Meta Pixel community template) as supported + provisional with access-token reason", () => {
+      const tag: CanonicalTag = {
+        tagId: "50",
+        name: "Meta Pixel",
+        type: "cvt_5RM3Q",
+        firingTriggerIds: ["51"],
         parameters: {},
         rawParameterKeys: []
       };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("custom");
-      expect(mappings[0].confidence).toBeLessThan(6.0);
-      expect(mappings[0].serverRecommendation).toContain("template");
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.supported).toBe(true);
+      expect(mapping.provisional).toBe(true);
+      // Meta rule no longer flags pixelId/eventName as missing — they live in
+      // the community template's embedded config.
+      expect(mapping.missingParameters).toEqual([]);
+      expect(mapping.reviewReason).toContain("Meta CAPI access token");
     });
 
-    it("should match consent platform tags", () => {
+    it("maps gclidw as Conversion Linker with no required params", () => {
       const tag: CanonicalTag = {
-        tagId: "35",
-        name: "Cookiebot Consent",
-        type: "html",
-        firingTriggerIds: ["36"],
-        parameters: {
-          html: "Cookiebot consent script"
-        },
-        rawParameterKeys: ["html"]
-      };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      // Will match consent or HTML rule depending on priority
-      expect(["consent", "custom"]).toContain(mappings[0].category);
-    });
-  });
-
-  describe("Fallback Behavior", () => {
-    it("should handle unknown tag types with generic fallback", () => {
-      const tag: CanonicalTag = {
-        tagId: "40",
-        name: "Unknown Vendor Tag",
-        type: "unknown_vendor",
-        firingTriggerIds: ["41"],
+        tagId: "60",
+        name: "Google Ads - clicks",
+        type: "gclidw",
+        firingTriggerIds: [],
         parameters: {},
         rawParameterKeys: []
       };
-
-      const mappings = applyRuleset([tag]);
-
-      expect(mappings).toHaveLength(1);
-      expect(mappings[0].category).toBe("unknown");
-      expect(mappings[0].confidence).toBeLessThanOrEqual(5.5);
-      expect(mappings[0].provisional).toBe(true);
-      expect(mappings[0].manualActions.length).toBeGreaterThan(0);
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.supported).toBe(true);
+      expect(mapping.category).toBe("ads");
+      expect(mapping.missingRequired).toBe(false);
+      expect(mapping.missingParameters).toEqual([]);
+      expect(mapping.reviewReason).toBeNull();
     });
   });
 
-  describe("aggregateConfidence", () => {
-    it("should calculate weighted average confidence", () => {
+  describe("Unsupported client tag types", () => {
+    it.each([
+      "html",
+      "img",
+      "gaawc",
+      "ua",
+      "cvt_other_template",
+      "unknown_vendor"
+    ])("short-circuits %s as unsupported with a manual-rebuild action", type => {
+      const tag: CanonicalTag = {
+        tagId: `t-${type}`,
+        name: `Tag of type ${type}`,
+        type,
+        firingTriggerIds: [],
+        parameters: {},
+        rawParameterKeys: []
+      };
+      const [mapping] = applyRuleset([tag]);
+      expect(mapping.supported).toBe(false);
+      expect(mapping.category).toBe("unknown");
+      expect(mapping.provisional).toBe(true);
+      expect(mapping.manualActions.some(a => a.includes("Unsupported"))).toBe(true);
+      expect(mapping.serverRecommendation).toContain("not supported");
+    });
+  });
+
+  describe("runNeedsReview", () => {
+    it("returns true when any mapping is unsupported, provisional, or missingRequired", () => {
       const mappings = applyRuleset([
-        {
-          tagId: "1",
-          name: "GA4 Config",
-          type: "googtag",
-          firingTriggerIds: [],
-          parameters: { tagId: "G-XXX" },
-          rawParameterKeys: ["tagId"]
-        },
-        {
-          tagId: "2",
-          name: "Meta Pixel",
-          type: "custom_meta",
-          firingTriggerIds: [],
-          parameters: {},
-          rawParameterKeys: []
-        }
+        { tagId: "1", name: "GA4 Config", type: "googtag", firingTriggerIds: [], parameters: { tagId: "G-XXX" }, rawParameterKeys: ["tagId"] },
+        { tagId: "2", name: "Custom HTML", type: "html", firingTriggerIds: [], parameters: { html: "<script></script>" }, rawParameterKeys: ["html"] }
       ]);
-
-      const { score, provisional } = aggregateConfidence(mappings);
-
-      expect(score).toBeGreaterThan(0);
-      expect(score).toBeLessThanOrEqual(10);
-      expect(typeof provisional).toBe("boolean");
+      expect(runNeedsReview(mappings)).toBe(true);
     });
 
-    it("should mark as provisional if any mapping has low confidence", () => {
-      const mappings = applyRuleset([
-        {
-          tagId: "1",
-          name: "GA4 Config",
-          type: "googtag",
-          firingTriggerIds: [],
-          parameters: { tagId: "G-XXX" },
-          rawParameterKeys: ["tagId"]
-        },
-        {
-          tagId: "2",
-          name: "Custom HTML",
-          type: "html",
-          firingTriggerIds: [],
-          parameters: { html: "<script></script>" },
-          rawParameterKeys: ["html"]
-        }
-      ]);
-
-      const { provisional } = aggregateConfidence(mappings);
-
-      expect(provisional).toBe(true);
+    it("returns true for empty mappings", () => {
+      expect(runNeedsReview([])).toBe(true);
     });
 
-    it("should return zero score for empty mappings", () => {
-      const { score, provisional } = aggregateConfidence([]);
-
-      expect(score).toBe(0);
-      expect(provisional).toBe(true);
+    it("returns false when every mapping is supported, vendor-documented and complete", () => {
+      const mappings = applyRuleset([
+        { tagId: "1", name: "GA4 Config", type: "googtag", firingTriggerIds: [], parameters: { tagId: "G-XXX" }, rawParameterKeys: ["tagId"] }
+      ]);
+      expect(runNeedsReview(mappings)).toBe(false);
     });
   });
 
   describe("Multiple Tags", () => {
-    it("should handle multiple tags correctly", () => {
+    it("preserves 1:1 tag-to-mapping alignment with mixed supported + unsupported", () => {
       const tags: CanonicalTag[] = [
-        {
-          tagId: "1",
-          name: "GA4 Config",
-          type: "googtag",
-          firingTriggerIds: ["2"],
-          parameters: { tagId: "G-XXX" },
-          rawParameterKeys: ["tagId"]
-        },
-        {
-          tagId: "3",
-          name: "Google Ads Conversion",
-          type: "awct",
-          firingTriggerIds: ["4"],
-          parameters: {
-            conversionId: "AW-123",
-            conversionLabel: "abc"
-          },
-          rawParameterKeys: ["conversionId", "conversionLabel"]
-        },
-        {
-          tagId: "5",
-          name: "Custom Script",
-          type: "html",
-          firingTriggerIds: ["6"],
-          parameters: { html: "<script></script>" },
-          rawParameterKeys: ["html"]
-        }
+        { tagId: "1", name: "GA4 Config", type: "googtag", firingTriggerIds: ["2"], parameters: { tagId: "G-XXX" }, rawParameterKeys: ["tagId"] },
+        { tagId: "3", name: "Google Ads Conversion", type: "awct", firingTriggerIds: ["4"], parameters: { conversionId: "AW-123", conversionLabel: "abc" }, rawParameterKeys: ["conversionId", "conversionLabel"] },
+        { tagId: "5", name: "Custom Script", type: "html", firingTriggerIds: ["6"], parameters: { html: "<script></script>" }, rawParameterKeys: ["html"] }
       ];
-
       const mappings = applyRuleset(tags);
-
       expect(mappings).toHaveLength(3);
+      expect(mappings[0].supported).toBe(true);
       expect(mappings[0].category).toBe("analytics");
+      expect(mappings[1].supported).toBe(true);
       expect(mappings[1].category).toBe("ads");
-      expect(mappings[2].category).toBe("custom");
+      expect(mappings[2].supported).toBe(false);
+      expect(mappings[2].category).toBe("unknown");
     });
   });
 });

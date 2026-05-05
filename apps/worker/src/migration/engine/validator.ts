@@ -134,7 +134,6 @@ export function validateConstraints(
 export function evaluateManualReview(
   tag: CanonicalTag,
   rule: Rule,
-  confidence: number,
   validationResults: ValidationResult[]
 ): ManualAction[] {
   const actions: ManualAction[] = [];
@@ -147,12 +146,6 @@ export function evaluateManualReview(
     let shouldTrigger = false;
 
     switch (condition.trigger) {
-      case "lowConfidence": {
-        const threshold = typeof condition.threshold === "number" ? condition.threshold : 7.0;
-        shouldTrigger = confidence < threshold;
-        break;
-      }
-
       case "missingParameter": {
         const requiredParams = rule.transform.parameterMappings?.filter(pm => pm.required) || [];
         const missingParams = requiredParams.filter(
@@ -206,12 +199,12 @@ export function evaluateManualReview(
 }
 
 /**
- * Generate standard manual actions based on confidence and validation results.
+ * Generate standard manual actions based on validation results + provisional/missing-required flags.
  */
 export function generateStandardManualActions(
-  confidence: number,
   validationResults: ValidationResult[],
-  provisional: boolean
+  provisional: boolean,
+  missingRequired: boolean
 ): ManualAction[] {
   const actions: ManualAction[] = [];
 
@@ -235,24 +228,19 @@ export function generateStandardManualActions(
     });
   }
 
-  // Add confidence-based actions
-  if (confidence < 5.0) {
-    actions.push({
-      priority: "critical",
-      reason: "Very low confidence mapping",
-      recommendation: "Manual verification required before deployment. Consider consulting vendor documentation or engineering support."
-    });
-  } else if (confidence < 7.0) {
+  if (missingRequired) {
     actions.push({
       priority: "high",
-      reason: "Low confidence mapping",
-      recommendation: "Review mapping against vendor documentation and test thoroughly in preview mode."
+      reason: "Missing required parameter",
+      recommendation: "Fill the required parameter on the source tag before deploying to server."
     });
-  } else if (provisional) {
+  }
+
+  if (provisional) {
     actions.push({
       priority: "medium",
       reason: "Provisional mapping",
-      recommendation: "Verify parameter mappings and test event delivery in server container preview."
+      recommendation: "Mapping is best-effort (no vendor documentation). Verify parameter mappings and test event delivery in server container preview."
     });
   }
 

@@ -7,6 +7,34 @@ import type { Rule } from "./schema.js";
 
 export const adsRules: Rule[] = [
   {
+    id: "google-ads-conversion-linker",
+    name: "Google Ads Conversion Linker",
+    description: "Google Ads Conversion Linker (gclidw) — stores gclid/wbraid/gbraid in first-party cookies. Does not itself track conversions, so no conversion ID/label is configured on this tag.",
+    category: "ads",
+    priority: 910,
+    matchConditions: [
+      {
+        field: "tagType",
+        operator: "equals",
+        value: "gclidw"
+      }
+    ],
+    transform: {
+      serverTagType: "Google Ads Conversion Linker (Server)",
+      description:
+        "Server-side Conversion Linker — persists gclid/wbraid/gbraid in first-party cookies on the tagging server domain so downstream Ads tags can attribute conversions.",
+      parameterMappings: [],
+      configurationHints: [
+        "Enable first-party domain for tagging server (custom subdomain recommended)",
+        "No Conversion ID or Label needed here — those belong on the Google Ads Conversion tag",
+        "Ensure cookie flags (SameSite, Secure) match your cookie policy"
+      ]
+    },
+    provisional: false,
+    evidenceRef: "https://support.google.com/tagmanager/answer/7549390",
+    tags: ["ads", "google-ads", "conversion-linker", "gclid"]
+  },
+  {
     id: "google-ads-conversion",
     name: "Google Ads Conversion Tracking",
     description: "Google Ads conversion tracking tag (awct)",
@@ -15,8 +43,8 @@ export const adsRules: Rule[] = [
     matchConditions: [
       {
         field: "tagType",
-        operator: "oneOf",
-        value: ["awct", "gclidw"]
+        operator: "equals",
+        value: "awct"
       }
     ],
     transform: {
@@ -61,7 +89,6 @@ export const adsRules: Rule[] = [
         "Verify conversion counting method (One vs Every) matches business requirements"
       ]
     },
-    confidence: 8.8,
     provisional: false,
     evidenceRef: "https://support.google.com/tagmanager/answer/13005567",
     constraints: [
@@ -123,7 +150,6 @@ export const adsRules: Rule[] = [
         "Custom parameters can segment audiences for dynamic remarketing"
       ]
     },
-    confidence: 8.2,
     provisional: false,
     evidenceRef: "https://support.google.com/google-ads/answer/7305793",
     constraints: [
@@ -184,7 +210,6 @@ export const adsRules: Rule[] = [
         "Test in Campaign Manager using Floodlight debugger"
       ]
     },
-    confidence: 7.8,
     provisional: true,
     evidenceRef: "https://support.google.com/campaignmanager/answer/13234809",
     constraints: [
@@ -195,15 +220,7 @@ export const adsRules: Rule[] = [
         message: "Advertiser ID is required for Floodlight tags"
       }
     ],
-    manualReview: [
-      {
-        trigger: "lowConfidence",
-        threshold: 8.0,
-        priority: "medium",
-        action: "Verify Floodlight configuration IDs against Campaign Manager account and test event delivery"
-      }
-    ],
-    tags: ["floodlight", "campaign-manager", "dcm", "ads"]
+        tags: ["floodlight", "campaign-manager", "dcm", "ads"]
   },
   {
     id: "floodlight-sales",
@@ -259,7 +276,6 @@ export const adsRules: Rule[] = [
         "Validate revenue format matches Floodlight expectations"
       ]
     },
-    confidence: 8.0,
     provisional: true,
     evidenceRef: "https://support.google.com/campaignmanager/answer/13234809",
     constraints: [
@@ -326,7 +342,6 @@ export const adsRules: Rule[] = [
         "User data helps improve conversion measurement accuracy"
       ]
     },
-    confidence: 8.5,
     provisional: false,
     evidenceRef: "https://support.google.com/google-ads/answer/11062876",
     constraints: [

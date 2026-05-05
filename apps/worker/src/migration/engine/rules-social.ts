@@ -22,37 +22,17 @@ export const socialRules: Rule[] = [
     transform: {
       serverTagType: "Meta Conversions API",
       description: "Server-side Meta CAPI tag with hashed PII and event mapping",
+      // Meta Pixel community templates (cvt_5RM3Q) hold pixelId / eventName
+      // inside an embedded template config, not as top-level GTM parameters,
+      // so we can't assert presence from the canonical tag shape. Keep the
+      // mappings informational (required: false) and rely on the provisional
+      // flag + deploy-time Meta CAPI access token to drive review.
       parameterMappings: [
-        {
-          clientParam: "pixelId",
-          serverParam: "pixel_id",
-          required: true,
-          transform: "passthrough"
-        },
-        {
-          clientParam: "eventName",
-          serverParam: "event_name",
-          required: true,
-          transform: "eventName"
-        },
-        {
-          clientParam: "eventId",
-          serverParam: "event_id",
-          required: false,
-          transform: "passthrough"
-        },
-        {
-          clientParam: "userData",
-          serverParam: "user_data",
-          required: false,
-          transform: "hash"
-        },
-        {
-          clientParam: "customData",
-          serverParam: "custom_data",
-          required: false,
-          transform: "passthrough"
-        }
+        { clientParam: "pixelId", serverParam: "pixel_id", required: false, transform: "passthrough" },
+        { clientParam: "eventName", serverParam: "event_name", required: false, transform: "eventName" },
+        { clientParam: "eventId", serverParam: "event_id", required: false, transform: "passthrough" },
+        { clientParam: "userData", serverParam: "user_data", required: false, transform: "hash" },
+        { clientParam: "customData", serverParam: "custom_data", required: false, transform: "passthrough" }
       ],
       configurationHints: [
         "Configure Meta Conversions API access token in server container (use Secrets Manager)",
@@ -62,16 +42,9 @@ export const socialRules: Rule[] = [
         "Test event delivery using Meta Events Manager Test Events tool"
       ]
     },
-    confidence: 6.5,
     provisional: true,
     evidenceRef: "https://developers.facebook.com/docs/marketing-api/conversions-api",
     constraints: [
-      {
-        type: "requiresParameter",
-        field: "pixelId",
-        severity: "critical",
-        message: "Pixel ID is required for Meta Conversions API"
-      },
       {
         type: "requiresPII",
         severity: "warning",
@@ -84,13 +57,7 @@ export const socialRules: Rule[] = [
       }
     ],
     manualReview: [
-      {
-        trigger: "lowConfidence",
-        threshold: 7.5,
-        priority: "high",
-        action: "Map Pixel ID and access token in server environment. Validate event_name and custom_data against Meta CAPI schema."
-      },
-      {
+            {
         trigger: "securityRisk",
         priority: "critical",
         action: "Verify PII hashing implementation and test with Meta Events Manager before production deployment"
@@ -157,7 +124,6 @@ export const socialRules: Rule[] = [
         "Include event_id from client pixel for deduplication"
       ]
     },
-    confidence: 7.2,
     provisional: true,
     evidenceRef: "https://developers.facebook.com/docs/meta-pixel/implementation/conversion-tracking",
     constraints: [
@@ -220,7 +186,6 @@ export const socialRules: Rule[] = [
         "Use event_id for deduplication between pixel and Events API"
       ]
     },
-    confidence: 5.8,
     provisional: true,
     evidenceRef: "https://ads.tiktok.com/help/article/events-api",
     constraints: [
@@ -230,15 +195,7 @@ export const socialRules: Rule[] = [
         message: "TikTok Events API may require custom template - verify server-side template availability"
       }
     ],
-    manualReview: [
-      {
-        trigger: "lowConfidence",
-        threshold: 7.0,
-        priority: "high",
-        action: "Install TikTok Events API server template from GTM Gallery or build custom HTTP request tag. Test event delivery in TikTok Events Manager."
-      }
-    ],
-    tags: ["tiktok", "social", "pixel"]
+        tags: ["tiktok", "social", "pixel"]
   },
   {
     id: "linkedin-insight",
@@ -262,7 +219,6 @@ export const socialRules: Rule[] = [
         "Hash PII fields per LinkedIn requirements"
       ]
     },
-    confidence: 5.2,
     provisional: true,
     evidenceRef: "https://learn.microsoft.com/en-us/linkedin/marketing/integrations/ads/advertising-api/conversion-api",
     manualReview: [
@@ -296,7 +252,6 @@ export const socialRules: Rule[] = [
         "Hash PII per Pinterest requirements (email, phone)"
       ]
     },
-    confidence: 5.5,
     provisional: true,
     evidenceRef: "https://developers.pinterest.com/docs/conversions/conversions/",
     manualReview: [
@@ -329,7 +284,6 @@ export const socialRules: Rule[] = [
         "Review Twitter Ads API documentation for current server-side tracking options"
       ]
     },
-    confidence: 5.0,
     provisional: true,
     evidenceRef: "https://developer.twitter.com/en/docs/twitter-ads-api/campaign-management/api-reference/conversions",
     manualReview: [
@@ -363,7 +317,6 @@ export const socialRules: Rule[] = [
         "Hash PII per Snapchat requirements"
       ]
     },
-    confidence: 5.5,
     provisional: true,
     evidenceRef: "https://businesshelp.snapchat.com/s/article/conversions-api",
     manualReview: [

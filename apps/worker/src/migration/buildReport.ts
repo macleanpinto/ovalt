@@ -18,8 +18,7 @@ export type MigrationReportPayload = {
   rulesetVersion: string;
   generatedAt: string;
   executiveSummary: string;
-  confidenceScore: number;
-  provisional: boolean;
+  needsReview: boolean;
   summaryCounts: {
     mappings: number;
     warnings: number;
@@ -32,7 +31,6 @@ export type MigrationReportPayload = {
     autoMigratable: number;
     manualRequired: number;
     clientOnly: number;
-    confidenceScore: number;
   };
   containerSummary: {
     totalTags: number;
@@ -75,7 +73,8 @@ export type MigrationReportPayload = {
     name: string;
     type: string;
     category: string;
-    status: "ready" | "mapping" | "needs_review";
+    status: "ready" | "needs_review" | "unsupported";
+    supported: boolean;
     triggerSummary: string;
     parameters?: Record<string, string>;
     firingTriggerIds?: string[];
@@ -83,10 +82,11 @@ export type MigrationReportPayload = {
   frontendChangeSteps: string[];
 };
 
-function statusForMapping(m: MappingRecord): "ready" | "mapping" | "needs_review" {
-  if (m.confidence >= 8.5 && !m.provisional) return "ready";
-  if (m.confidence >= 6) return "mapping";
-  return "needs_review";
+function statusForMapping(m: MappingRecord): "ready" | "needs_review" | "unsupported" {
+  if (!m.supported) return "unsupported";
+  if (m.missingRequired) return "needs_review";
+  if (m.provisional) return "needs_review";
+  return "ready";
 }
 
 function buildFrontendChangeSteps(containerProvisioning: {
@@ -140,14 +140,12 @@ export function buildMigrationReport(opts: {
   variables?: CanonicalVariable[];
   variableMappings?: VariableMappingRecord[];
   variableStats?: {
-    score: number;
     provisional: boolean;
     autoMigratable: number;
     manualRequired: number;
     clientOnly: number;
   };
-  confidenceScore: number;
-  provisional: boolean;
+  needsReview: boolean;
   triggerLookup: Map<string, string>;
   variableLookup?: Map<string, string>;
   containerProvisioning: {
@@ -179,7 +177,7 @@ export function buildMigrationReport(opts: {
     for (const rec of m.manualActions) {
       if (manualFlat.length >= 48) break;
       manualFlat.push({
-        priority: m.confidence < 6 ? "high" : "medium",
+        priority: m.missingRequired ? "high" : "medium",
         reason: `${m.clientTagName}: ${rec}`,
         recommendation: m.serverRecommendation.slice(0, 280)
       });
@@ -195,6 +193,7 @@ export function buildMigrationReport(opts: {
         type: t.type,
         category: "GENERAL",
         status: "needs_review" as const,
+        supported: false,
         triggerSummary: triggerSummary(t, opts.triggerLookup),
         parameters: t.parameters,
         firingTriggerIds: t.firingTriggerIds
@@ -206,13 +205,14 @@ export function buildMigrationReport(opts: {
       type: t.type,
       category: categoryLabel(m),
       status: statusForMapping(m),
+      supported: m.supported,
       triggerSummary: triggerSummary(t, opts.triggerLookup),
       parameters: t.parameters,
       firingTriggerIds: t.firingTriggerIds
     };
   });
 
-  const warnings = opts.mappings.filter((m) => m.provisional || m.confidence < 7).length;
+  const warnings = opts.mappings.filter((m) => m.provisional || m.missingRequired).length;
 
   // Add container provisioning context to executive summary
   const provisioningNote =
@@ -227,8 +227,7 @@ export function buildMigrationReport(opts: {
     totalVariables: opts.variables?.length || 0,
     autoMigratable: opts.variableStats.autoMigratable,
     manualRequired: opts.variableStats.manualRequired,
-    clientOnly: opts.variableStats.clientOnly,
-    confidenceScore: opts.variableStats.score
+    clientOnly: opts.variableStats.clientOnly
   } : undefined;
 
   // Build detected variables list
@@ -252,7 +251,9 @@ export function buildMigrationReport(opts: {
   const executiveSummary = [
     `Tag Relay migration run ${opts.runId} for import ${opts.importId} (${opts.projectId}).`,
     `Analyzed ${opts.tags.length} client-side tags${variableSummary ? ` and ${variableSummary.totalVariables} variables` : ""} with ruleset ${opts.rulesetVersion}.`,
-    `Weighted confidence ${opts.confidenceScore}/10${opts.provisional ? " (provisional mappings present — review before publish)" : ""}.`,
+    opts.needsReview
+      ? "Some mappings need review before deployment (provisional or missing required parameters)."
+      : "All mappings are vendor-documented and have their required parameters.",
     variableNote,
     highRiskMappings.length > 0
       ? `${highRiskMappings.length} high-risk mappings require critical review before deployment.`
@@ -270,8 +271,7 @@ export function buildMigrationReport(opts: {
     rulesetVersion: opts.rulesetVersion,
     generatedAt: new Date().toISOString(),
     executiveSummary,
-    confidenceScore: opts.confidenceScore,
-    provisional: opts.provisional,
+    needsReview: opts.needsReview,
     summaryCounts: {
       mappings: opts.mappings.length,
       warnings,

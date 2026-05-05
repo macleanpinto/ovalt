@@ -40,16 +40,8 @@ export type CanonicalVariable = {
   formatValue?: unknown;
 };
 
-/** Rule-engine docs link, agent web search + synthesis, or ruleset-internal marker. */
-export type MappingEvidence =
-  | { type: "docs"; ref: string }
-  | {
-      type: "agent_web";
-      /** Primary documentation URL or first search hit */
-      ref: string;
-      sources?: { title?: string; url: string }[];
-      searchQuery?: string;
-    };
+/** Rule-engine docs link for this mapping. */
+export type MappingEvidence = { type: "docs"; ref: string };
 
 export type MappingRecord = {
   clientTagId: string;
@@ -57,8 +49,20 @@ export type MappingRecord = {
   clientTagType: string;
   category: "analytics" | "ecommerce" | "social" | "ads" | "custom" | "consent" | "unknown";
   serverRecommendation: string;
-  confidence: number;
   provisional: boolean;
+  /** True when required parameters for this tag type are not present on the source tag. */
+  missingRequired: boolean;
+  /** Client-param names that are required by the matched rule but absent on the source tag. */
+  missingParameters: string[];
+  /** Whether this client tag type is in the supported whitelist and can be deployed. */
+  supported: boolean;
+  /**
+   * Short human-readable reason this mapping needs review when no fields are
+   * missing on the source tag. Used by the UI to explain "Needs Review" for
+   * provisional mappings (e.g. Meta CAPI access token required at deploy).
+   * Null when the tag is Ready or when missingParameters already explains it.
+   */
+  reviewReason: string | null;
   evidence: MappingEvidence;
   manualActions: string[];
 };
@@ -71,7 +75,6 @@ export type VariableMappingRecord = {
   serverRecommendation: string;
   canAutoMigrate: boolean;
   serverVariableType: string | null;
-  confidence: number;
   provisional: boolean;
   manualActions: string[];
 };
@@ -103,6 +106,8 @@ export type DeploymentMessage = {
     approvedTagIds: string[];
     tagsByCategory: Record<string, string[]>;
     metaAccessToken?: string;
+    /** Per-tag client-parameter overrides filled in by the user in Review & Deploy modal. */
+    parameterOverrides?: Record<string, Record<string, string>>;
   };
 };
 

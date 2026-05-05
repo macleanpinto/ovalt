@@ -6,7 +6,7 @@ import { z } from "zod";
  * Rules are versioned, testable, and auditable. Each rule defines:
  * - match: conditions that must be satisfied
  * - transform: mapping to server-side equivalent
- * - confidence: base score before modifiers
+ * - provisional: whether this mapping is best-effort vs vendor-documented
  * - constraints: validation requirements
  * - manualReview: when human review is required
  */
@@ -77,7 +77,6 @@ export type Constraint = z.infer<typeof constraintSchema>;
 export const manualReviewConditionSchema = z.object({
   /** Condition that triggers manual review */
   trigger: z.enum([
-    "lowConfidence",
     "missingParameter",
     "customTag",
     "securityRisk",
@@ -109,9 +108,7 @@ export const ruleSchema = z.object({
   matchConditions: z.array(matchConditionSchema).min(1),
   /** Transformation to apply */
   transform: transformSchema,
-  /** Base confidence score (0-10) */
-  confidence: z.number().min(0).max(10),
-  /** Whether this mapping is provisional */
+  /** Whether this mapping is provisional (best-effort, not vendor-documented). */
   provisional: z.boolean().default(false),
   /** Evidence reference (documentation URL) */
   evidenceRef: z.string().url(),
@@ -145,8 +142,10 @@ export const ruleMatchResultSchema = z.object({
   matched: z.boolean(),
   /** The rule that matched */
   rule: ruleSchema.optional(),
-  /** Match confidence modifier (can adjust base confidence) */
-  confidenceModifier: z.number().optional(),
+  /** True when the matched tag is missing a required parameter. */
+  missingRequired: z.boolean().optional(),
+  /** Client-param names flagged as required-but-absent on the source tag. */
+  missingParameters: z.array(z.string()).optional(),
   /** Additional context from matching */
   matchContext: z.record(z.unknown()).optional()
 });

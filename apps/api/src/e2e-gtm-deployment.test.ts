@@ -323,16 +323,14 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
       return;
     }
 
-    console.log(`   Confidence Score: ${migrationStatus.confidenceScore}/10\n`);
-
-    // =========================================================================
+        // =========================================================================
     // STEP 5: Get Migration Report & Select Tags to Deploy
     // =========================================================================
     console.log('📊 STEP 5: Analyzing Migration Report');
     console.log('─────────────────────────────────────────────────────────\n');
 
     // In a real scenario, you'd fetch the report and select which tags to deploy
-    // For this test, we'll assume all high-confidence tags are approved
+    // For this test, we will approve all ready tags
 
     const reportResponse = await app.inject({
       method: 'GET',
@@ -354,8 +352,7 @@ describe.skipIf(shouldSkip)('E2E: Full GTM Migration & Deployment', () => {
       for (const tag of report.detectedTags) {
         approvedTagIds.push(tag.id);
         const mapping = report.mappings?.find((m: any) => m.clientTagId === tag.id);
-        const conf = mapping?.confidence || 'unknown';
-        console.log(`   ✅ Approved: ${tag.name} (confidence: ${conf}/10, status: ${tag.status})`);
+                console.log(`   ✅ Approved: ${tag.name} (status: ${tag.status})`);
       }
     }
 

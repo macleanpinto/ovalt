@@ -158,7 +158,7 @@ if (tagName.includes('GA4') || tagName.includes('google analytics')) {
 
 1. Migration must create or guide creation of a GTM server-side container.
 2. Output format is hybrid: automated artifacts plus scripts/checklists for manual steps.
-3. Confidence scoring is docs-first, with agent-scored provisional fallback when docs/examples are unavailable.
+3. Only tag types in the supported whitelist can be auto-deployed (see `apps/worker/src/migration/engine/supportedTypes.ts`). Mappings are flagged `provisional` or `missingRequired` so the UI can gate deployment on user review.
 4. Architecture is SaaS-first and multi-tenant.
 5. Extensibility must support future provider adapters/mapping packs (for example Taggers) without redesigning core flow.
 
@@ -184,6 +184,21 @@ if (tagName.includes('GA4') || tagName.includes('google analytics')) {
   - **API**: https://api.ovalt.org
   - **Privacy**: https://ovalt.org/privacy
   - **Terms**: https://ovalt.org/terms
+
+## Granting platform admin
+
+The `/admin` dashboard is gated by `isPlatformAdmin: true` on the user record. There is no UI to grant this; set it manually:
+
+```bash
+AWS_PROFILE=tagrelay-prod aws dynamodb update-item \
+  --table-name tag-relay-users-production \
+  --region eu-north-1 \
+  --key '{"userId":{"S":"<your-user-id>"}}' \
+  --update-expression "SET isPlatformAdmin = :t" \
+  --expression-attribute-values '{":t":{"BOOL":true}}'
+```
+
+Look up your `userId` by email via the `email-index` GSI or from the `/auth/me` response after logging in.
 
 ## Production configuration
 

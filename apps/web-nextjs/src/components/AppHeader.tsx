@@ -83,6 +83,16 @@ export default function AppHeader({ className = '' }: AppHeaderProps) {
                     <p className="text-sm font-medium text-white">{user.name || user.email}</p>
                     <p className="mt-0.5 text-xs text-zinc-500">{user.email}</p>
                   </div>
+                  {user.isPlatformAdmin && (
+                    <Link
+                      href="/admin"
+                      onClick={() => setShowUserMenu(false)}
+                      className="flex w-full items-center gap-2 border-b border-white/10 px-4 py-2.5 text-left text-sm text-zinc-300 transition-colors hover:bg-white/5 hover:text-white"
+                    >
+                      <span className="material-symbols-outlined text-base">admin_panel_settings</span>
+                      Admin
+                    </Link>
+                  )}
                   <button
                     type="button"
                     onClick={() => {

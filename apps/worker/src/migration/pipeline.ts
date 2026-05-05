@@ -1,8 +1,8 @@
 import { PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { buildTriggerNameLookup, buildVariableNameLookup, extractCanonicalTags, extractCanonicalVariables } from "./canonical.js";
-import { applyRuleset, aggregateConfidence, RULESET_VERSION } from "./engine/index.js";
-import { applyVariableRuleset, aggregateVariableConfidence } from "./engine/rules-variables.js";
+import { applyRuleset, runNeedsReview, RULESET_VERSION } from "./engine/index.js";
+import { applyVariableRuleset, aggregateVariableStats } from "./engine/rules-variables.js";
 // Removed: AI enrichment (Bedrock) - no longer needed with comprehensive type mappings
 import { buildMigrationReport } from "./buildReport.js";
 import { reportToMarkdown } from "./markdown.js";
@@ -100,11 +100,11 @@ export async function runMigrationPipeline(opts: {
 
     // Apply production ruleset engine for tags
     const mappings = applyRuleset(tags);
-    const { score, provisional } = aggregateConfidence(mappings);
+    const needsReview = runNeedsReview(mappings);
 
     // Apply variable rules
     const variableMappings = applyVariableRuleset(variables);
-    const variableStats = aggregateVariableConfidence(variableMappings);
+    const variableStats = aggregateVariableStats(variableMappings);
 
     // Build container summary
     const containerSummary = {
@@ -130,8 +130,7 @@ export async function runMigrationPipeline(opts: {
       variables,
       variableMappings,
       variableStats,
-      confidenceScore: score,
-      provisional,
+      needsReview,
       triggerLookup,
       variableLookup,
       containerProvisioning: {
@@ -158,7 +157,7 @@ export async function runMigrationPipeline(opts: {
 
     await writeArtifacts(s3, bucket, msg.runId, report, blueprint);
 
-    const status = provisional ? "needs_review" : "completed";
+    const status = needsReview ? "needs_review" : "completed";
     const manualActions = report.manualActions.slice(0, 25);
 
     await ddb.send(
@@ -166,12 +165,11 @@ export async function runMigrationPipeline(opts: {
         TableName: tableRuns,
         Key: { runId: msg.runId },
         UpdateExpression:
-          "SET #s = :s, updatedAt = :u, confidenceScore = :cs, summaryCounts = :sc, manualActions = :ma, containerProvisioningStatus = :cps",
+          "SET #s = :s, updatedAt = :u, summaryCounts = :sc, manualActions = :ma, containerProvisioningStatus = :cps",
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
           ":s": status,
           ":u": new Date().toISOString(),
-          ":cs": score,
           ":sc": report.summaryCounts,
           ":ma": manualActions,
           ":cps": "pending_client_deploy"

@@ -30,6 +30,35 @@ export interface User {
   email: string;
   name: string;
   avatar?: string;
+  isPlatformAdmin?: boolean;
+}
+
+export interface AdminOrgRow {
+  organizationId: string;
+  name: string;
+  slug?: string;
+  plan: string;
+  ownerEmail?: string;
+  imports: number;
+  migrations: number;
+  tagsDeployed: number;
+  lastActivityAt?: string;
+  createdAt?: string;
+}
+
+export interface AdminSummary {
+  totalUsers: number;
+  totalOrganizations: number;
+  totalImports: number;
+  totalMigrations: number;
+  totalTagsDeployed: number;
+  activeOrganizations30d: number;
+  planBreakdown: { free: number; pro: number; enterprise: number };
+  organizations: AdminOrgRow[];
+}
+
+export interface AdminSignupsSeries {
+  series: Array<{ date: string; count: number }>;
 }
 
 export interface Organization {
@@ -102,7 +131,6 @@ export interface Run {
   importId: string;
   organizationId: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'needs_review';
-  confidenceScore?: number;
   rulesetVersion: string;
   createdAt: string;
   completedAt?: string;
@@ -427,7 +455,8 @@ class APIClient {
     serverContainerPath: string,
     transport_url: string,
     gtmSessionId: string,
-    metaAccessToken?: string
+    metaAccessToken?: string,
+    parameterOverrides?: Record<string, Record<string, string>>
   ): Promise<any> {
     const endpoint = `/migrations/${runId}/deploy-approved-v2`;
     const fullUrl = `${API_URL}${endpoint}`;
@@ -441,7 +470,8 @@ class APIClient {
       clientWorkspacePath,
       serverContainerPath,
       transport_url,
-      hasMetaAccessToken: !!metaAccessToken
+      hasMetaAccessToken: !!metaAccessToken,
+      overrideTagCount: parameterOverrides ? Object.keys(parameterOverrides).length : 0
     });
 
     return this.request(endpoint, {
@@ -453,7 +483,8 @@ class APIClient {
         clientWorkspacePath,
         serverContainerPath,
         transport_url,
-        metaAccessToken
+        metaAccessToken,
+        parameterOverrides
       })
     });
   }
@@ -487,6 +518,15 @@ class APIClient {
       headers: { 'x-gtm-session': gtmSessionId },
       body: JSON.stringify(body)
     });
+  }
+
+  // Admin (platform-admin only)
+  async getAdminSummary(): Promise<AdminSummary> {
+    return this.request('/admin/metrics/summary');
+  }
+
+  async getAdminSignups(days = 30): Promise<AdminSignupsSeries> {
+    return this.request(`/admin/metrics/signups?days=${days}`);
   }
 }
 

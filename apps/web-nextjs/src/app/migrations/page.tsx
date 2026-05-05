@@ -179,17 +179,14 @@ export default function MigrationsPage() {
             <RampPanel padding="p-0" className="overflow-hidden">
               {/* Table Header */}
               <div className="grid grid-cols-12 border-b border-white/[0.08] bg-white/[0.03] px-6 py-4">
-                <div className="col-span-3 font-label text-xs uppercase tracking-widest text-white/50">
+                <div className="col-span-4 font-label text-xs uppercase tracking-widest text-white/50">
                   Run ID
                 </div>
-                <div className="col-span-3 font-label text-xs uppercase tracking-widest text-white/50">
+                <div className="col-span-4 font-label text-xs uppercase tracking-widest text-white/50">
                   Import ID
                 </div>
                 <div className="col-span-2 font-label text-xs uppercase tracking-widest text-white/50">
                   Status
-                </div>
-                <div className="col-span-2 font-label text-xs uppercase tracking-widest text-white/50 text-right">
-                  Confidence
                 </div>
                 <div className="col-span-1 font-label text-xs uppercase tracking-widest text-white/50 text-right">
                   Created
@@ -206,23 +203,16 @@ export default function MigrationsPage() {
                     key={run.runId}
                     className="grid grid-cols-12 items-center px-6 py-5 transition-colors hover:bg-white/[0.03]"
                   >
-                    <Link href={`/migrations/${run.runId}`} className="col-span-3">
+                    <Link href={`/migrations/${run.runId}`} className="col-span-4">
                       <code className="text-sm text-white font-mono hover:text-[#41ffaf]">{run.runId.slice(0, 12)}...</code>
                     </Link>
-                    <div className="col-span-3">
+                    <div className="col-span-4">
                       <code className="text-sm text-white/60 font-mono">{run.importId?.slice(0, 12)}...</code>
                     </div>
                     <div className="col-span-2">
                       <span className={`inline-block px-3 py-1 rounded-xl text-xs font-semibold label-font ${getStatusColor(run.status)}`}>
                         {getStatusLabel(run.status)}
                       </span>
-                    </div>
-                    <div className="col-span-2 text-right">
-                      {run.confidenceScore ? (
-                        <span className="text-white font-semibold">{run.confidenceScore.toFixed(1)}%</span>
-                      ) : (
-                        <span className="text-white/40">—</span>
-                      )}
                     </div>
                     <div className="col-span-1 text-right text-[#bacbbe] text-sm">
                       {formatRelativeTime(run.createdAt)}

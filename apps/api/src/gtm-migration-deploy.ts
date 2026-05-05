@@ -125,6 +125,39 @@ interface DeploymentRequest {
   approvedTagIds: string[];
   tagsByType: Map<string, any[]>; // Group of client tags by type
   metaAccessToken?: string; // Optional Meta Pixel Access Token for server-side deployment
+  /**
+   * Per-tag overrides for client-side parameters filled in by the user in the
+   * Review & Deploy modal (e.g. Measurement ID for an otherwise-empty googtag).
+   * Shape: { [tagId]: { [paramKey]: stringValue } }. Applied to every copy of
+   * the tag's `parameter` array used during deploy — both on the client tag
+   * we modify in the client workspace and on the server-side extraction of
+   * values for creating server tags.
+   */
+  parameterOverrides?: Record<string, Record<string, string>>;
+}
+
+/**
+ * Return a new GTM parameter array with the user-supplied overrides for this
+ * tag applied. Existing entries with a matching key get their value updated;
+ * missing keys get appended as { type: 'template', key, value }.
+ */
+function applyParameterOverrides(
+  parameters: any[],
+  tagId: string,
+  overrides?: Record<string, Record<string, string>>
+): any[] {
+  const forTag = overrides?.[tagId];
+  if (!forTag) return parameters;
+  const next = [...parameters];
+  for (const [key, value] of Object.entries(forTag)) {
+    const existing = next.find((p: any) => p && p.key === key);
+    if (existing) {
+      existing.value = value;
+    } else {
+      next.push({ type: 'template', key, value });
+    }
+  }
+  return next;
 }
 
 interface DeploymentResult {
@@ -144,6 +177,23 @@ interface DeploymentResult {
     accessTokenConfigured?: boolean;
     manualSetup?: { instructions: string[]; error?: string };
   }>;
+}
+
+/**
+ * Error thrown by deployMigrationWithExportImport when it fails partway
+ * through. Exposes the server tags that were actually created so the worker
+ * can persist a truthful deployedTagCount.
+ */
+export class DeploymentPartialFailureError extends Error {
+  readonly partialServerTagsCreated: DeploymentResult['serverTagsCreated'];
+  readonly cause: unknown;
+
+  constructor(cause: unknown, partialServerTagsCreated: DeploymentResult['serverTagsCreated']) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'DeploymentPartialFailureError';
+    this.cause = cause;
+    this.partialServerTagsCreated = partialServerTagsCreated;
+  }
 }
 
 /**
@@ -286,7 +336,50 @@ export async function deployMigrationWithExportImport(
   request: DeploymentRequest,
   log: FastifyBaseLogger
 ): Promise<DeploymentResult> {
+  // Shared accumulator across the whole function body. If the deployment throws
+  // mid-way we re-throw a DeploymentPartialFailureError carrying whatever tags
+  // were actually created so the worker can report a truthful deployedTagCount.
+  const serverTagsCreated: DeploymentResult['serverTagsCreated'] = [];
+
+  try {
+    return await deployMigrationImpl(auth, request, log, serverTagsCreated);
+  } catch (err) {
+    throw new DeploymentPartialFailureError(err, serverTagsCreated);
+  }
+}
+
+async function deployMigrationImpl(
+  auth: OAuth2Client,
+  request: DeploymentRequest,
+  log: FastifyBaseLogger,
+  serverTagsCreated: DeploymentResult['serverTagsCreated']
+): Promise<DeploymentResult> {
   const tm = google.tagmanager({ version: 'v2', auth });
+
+  // If the user filled in missing required parameters via the Review & Deploy
+  // modal, merge those values into every client tag's `parameter` array up
+  // front. Everything downstream — client-side modifications to the original
+  // tag, extraction of values for server-side tag creation — reads from the
+  // same tag objects, so doing this once at the top is both correct and
+  // avoids scattering override handling through 1700 lines of deploy logic.
+  if (request.parameterOverrides && Object.keys(request.parameterOverrides).length > 0) {
+    const overriddenTagIds: string[] = [];
+    for (const [, clientTags] of request.tagsByType.entries()) {
+      for (const clientTag of clientTags) {
+        if (clientTag?.tagId && request.parameterOverrides[clientTag.tagId]) {
+          clientTag.parameter = applyParameterOverrides(
+            clientTag.parameter || [],
+            clientTag.tagId,
+            request.parameterOverrides
+          );
+          overriddenTagIds.push(clientTag.tagId);
+        }
+      }
+    }
+    if (overriddenTagIds.length > 0) {
+      log.info({ overriddenTagIds }, 'Applied user-supplied parameter overrides');
+    }
+  }
 
   // ================================================================
   // STEP 0: Create clean workspace for migration
@@ -1011,7 +1104,8 @@ export async function deployMigrationWithExportImport(
   // ================================================================
   // Create one server tag per category with blocking triggers
   // EXCEPTION: Google Ads and Meta require individual conversion tracking tags
-  const serverTagsCreated: DeploymentResult['serverTagsCreated'] = [];
+  // (serverTagsCreated is provided by the outer wrapper so partial failures
+  // still carry a truthful count — see DeploymentPartialFailureError.)
 
   for (const [category, clientTags] of request.tagsByType.entries()) {
     if (clientTags.length === 0) continue;

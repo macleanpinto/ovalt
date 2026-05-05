@@ -9,6 +9,7 @@ export { registerMembersRoutes } from "./members-routes.js";
 export { EmailService } from "./email-service.js";
 export type { EmailServiceConfig, SendEmailResult } from "./email-service.js";
 export { authenticateRequest, requirePermission, getOrganizationId, getUserId } from "./middleware.js";
+export { requirePlatformAdmin } from "./platform-admin.js";
 export { TenantDataService } from "./tenant-data.js";
 export { generateApiKey, generateSessionId, hashApiKey } from "./jwt.js";
 export { OAuthService } from "./oauth-service.js";

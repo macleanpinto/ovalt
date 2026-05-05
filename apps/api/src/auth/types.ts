@@ -12,6 +12,7 @@ export type User = {
   updatedAt: string;
   emailVerified: boolean;
   lastLoginAt?: string;
+  isPlatformAdmin?: boolean;
 };
 
 export type Organization = {

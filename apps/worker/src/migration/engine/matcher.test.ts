@@ -32,7 +32,6 @@ describe("Rule Matcher", () => {
           serverTagType: "Test",
           description: "Test"
         },
-        confidence: 8.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -70,7 +69,6 @@ describe("Rule Matcher", () => {
           serverTagType: "Test",
           description: "Test"
         },
-        confidence: 8.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -109,7 +107,6 @@ describe("Rule Matcher", () => {
           serverTagType: "Test",
           description: "Test"
         },
-        confidence: 8.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -148,7 +145,6 @@ describe("Rule Matcher", () => {
           serverTagType: "Test",
           description: "Test"
         },
-        confidence: 9.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -185,7 +181,6 @@ describe("Rule Matcher", () => {
           serverTagType: "Test",
           description: "Test"
         },
-        confidence: 7.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -229,7 +224,6 @@ describe("Rule Matcher", () => {
           serverTagType: "Test",
           description: "Test"
         },
-        confidence: 9.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -271,7 +265,6 @@ describe("Rule Matcher", () => {
           serverTagType: "Test",
           description: "Test"
         },
-        confidence: 9.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -281,7 +274,7 @@ describe("Rule Matcher", () => {
       expect(result.matched).toBe(false);
     });
 
-    it("should apply confidence modifier for missing required parameters", () => {
+    it("should flag missingRequired for missing required parameters", () => {
       const tag: CanonicalTag = {
         tagId: "1",
         name: "Test Tag",
@@ -315,7 +308,6 @@ describe("Rule Matcher", () => {
             }
           ]
         },
-        confidence: 8.0,
         provisional: false,
         evidenceRef: "https://example.com"
       };
@@ -323,7 +315,7 @@ describe("Rule Matcher", () => {
       const result = evaluateRule(tag, rule);
 
       expect(result.matched).toBe(true);
-      expect(result.confidenceModifier).toBeLessThan(0);
+      expect(result.missingRequired).toBe(true);
     });
   });
 
@@ -356,7 +348,6 @@ describe("Rule Matcher", () => {
             serverTagType: "Low",
             description: "Test"
           },
-          confidence: 5.0,
           provisional: false,
           evidenceRef: "https://example.com"
         },
@@ -377,7 +368,6 @@ describe("Rule Matcher", () => {
             serverTagType: "High",
             description: "Test"
           },
-          confidence: 9.0,
           provisional: false,
           evidenceRef: "https://example.com"
         }
@@ -417,7 +407,6 @@ describe("Rule Matcher", () => {
             serverTagType: "Test",
             description: "Test"
           },
-          confidence: 8.0,
           provisional: false,
           evidenceRef: "https://example.com"
         }

@@ -40,7 +40,7 @@ Serverless only: no ECS/VPC for core app. API and worker run in **eu-north-1**; 
 
 - **Users / orgs / members** — multi-tenant; runs scoped by `organizationId`.
 - **Imports** — GTM web container payload metadata + S3 pointer.
-- **Runs** — status, ruleset version, scores, links to artifacts.
+- **Runs** — status, ruleset version, deployment history, links to artifacts.
 - **Sessions / API keys / OAuth accounts** — standard auth patterns.
 
 Import status: `uploaded | normalized | failed`. Run status: `queued | running | completed | needs_review | failed`.

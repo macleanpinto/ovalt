@@ -178,7 +178,8 @@ export async function processDeployment(message: DeploymentMessage): Promise<voi
         serverContainerUrl: deploymentConfig.serverContainerUrl,
         approvedTagIds: deploymentConfig.approvedTagIds,
         tagsByType: tagsByCategory,
-        metaAccessToken: deploymentConfig.metaAccessToken
+        metaAccessToken: deploymentConfig.metaAccessToken,
+        parameterOverrides: deploymentConfig.parameterOverrides
       },
       logger as FastifyBaseLogger
     );
@@ -190,7 +191,8 @@ export async function processDeployment(message: DeploymentMessage): Promise<voi
         Key: { runId },
         UpdateExpression:
           'SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), ' +
-          'lastDeployedAt = :timestamp, deploymentStatus = :status, deploymentCompletedAt = :completed',
+          'lastDeployedAt = :timestamp, deploymentStatus = :status, deploymentCompletedAt = :completed, ' +
+          'deployedTagCount = :count',
         ExpressionAttributeValues: {
           ':empty': [],
           ':deployment': [
@@ -210,7 +212,8 @@ export async function processDeployment(message: DeploymentMessage): Promise<voi
           ],
           ':timestamp': new Date().toISOString(),
           ':status': 'completed',
-          ':completed': new Date().toISOString()
+          ':completed': new Date().toISOString(),
+          ':count': result.serverTagsCreated.length
         }
       })
     );
@@ -220,6 +223,13 @@ export async function processDeployment(message: DeploymentMessage): Promise<voi
     logger.error({ err, runId }, 'Deployment failed');
     const message = err instanceof Error ? err.message : 'Deployment failed';
 
+    // If the deploy threw mid-way, the migration module wraps the error in
+    // DeploymentPartialFailureError carrying the tags that DID land in the
+    // server container. Count those so our stats reflect reality.
+    const partial = (err as { partialServerTagsCreated?: any[] })?.partialServerTagsCreated ?? [];
+    const deployedCount = Array.isArray(partial) ? partial.length : 0;
+    const failedCount = Math.max(deploymentConfig.approvedTagIds.length - deployedCount, 0);
+
     // Save failed deployment to DynamoDB
     await ddbDoc.send(
       new UpdateCommand({
@@ -227,21 +237,24 @@ export async function processDeployment(message: DeploymentMessage): Promise<voi
         Key: { runId },
         UpdateExpression:
           'SET deploymentHistory = list_append(if_not_exists(deploymentHistory, :empty), :deployment), ' +
-          'deploymentStatus = :status, deploymentCompletedAt = :completed, deploymentError = :error',
+          'deploymentStatus = :status, deploymentCompletedAt = :completed, deploymentError = :error, ' +
+          'deployedTagCount = :count',
         ExpressionAttributeValues: {
           ':empty': [],
           ':deployment': [
             {
               timestamp: new Date().toISOString(),
-              deployed: 0,
-              failed: deploymentConfig.approvedTagIds.length,
+              deployed: deployedCount,
+              failed: failedCount,
+              serverTags: partial,
               error: message,
               success: false
             }
           ],
           ':status': 'failed',
           ':completed': new Date().toISOString(),
-          ':error': message
+          ':error': message,
+          ':count': deployedCount
         }
       })
     );

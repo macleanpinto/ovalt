@@ -61,12 +61,12 @@ export default function Home() {
                 <span className="label-font text-[10px] uppercase tracking-widest text-[#5fde8f]">Production Ready</span>
               </div>
               <h1 className="mb-8 text-5xl font-semibold tracking-tight headline-font text-white md:text-7xl md:leading-[1.05]">
-                Move your GTM to the <span className="text-[#41ffaf]">server</span>
-                <span className="text-zinc-500"> — </span>without a developer.
+                Move your GTM to the <span className="text-[#41ffaf]">Server</span>
+                <span className="text-zinc-500"> - </span>within minutes
               </h1>
               <p className="mb-10 max-w-xl text-lg leading-relaxed text-zinc-400 md:text-xl">
-                Convert client-side containers into enterprise-grade server-side infrastructure in minutes. Privacy-first
-                tracking, minimal engineering lift.
+                Convert client-side containers into server-side container infrastructure in minutes. Privacy-first
+                tracking with minimal setup required.
               </p>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <Link
@@ -223,7 +223,7 @@ export default function Home() {
                 <span className="material-symbols-outlined text-3xl text-[#41ffaf]">build</span>
               </div>
               <h3 className="text-2xl font-bold headline-font mb-4 text-white">Rule-Based Migration</h3>
-              <p className="text-[#bacbbe] leading-relaxed">30+ production rules automatically convert your tags with confidence scoring and validation.</p>
+              <p className="text-[#bacbbe] leading-relaxed">30+ production rules automatically convert your tags, flag provisional mappings, and surface required follow-ups.</p>
             </div>
             <div className="group rounded-3xl border border-white/[0.08] bg-[#20201f] p-10 transition-colors hover:bg-[#252524]">
               <div className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-[#353535] transition-colors group-hover:border-white/25">
@@ -240,7 +240,7 @@ export default function Home() {
           <div className="relative mx-auto max-w-5xl overflow-hidden rounded-[2rem] border border-white/[0.08] bg-gradient-to-br from-[#20201f] to-[#1c1b1b] p-12 text-center md:p-20">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(65,255,175,0.05),transparent)] pointer-events-none"></div>
             <h2 className="text-4xl md:text-6xl font-extrabold headline-font mb-6 relative z-10 text-white">Start your migration today.</h2>
-            <p className="text-xl text-[#bacbbe] mb-12 max-w-2xl mx-auto relative z-10">Production-ready serverless architecture. Deploy to AWS in 15 minutes.</p>
+            <p className="text-xl text-[#bacbbe] mb-12 max-w-2xl mx-auto relative z-10">Production-ready server-side infrastructure. Deploy to GTM in 5 minutes.</p>
             <div className="relative z-10 flex flex-col justify-center gap-4 sm:flex-row sm:gap-5">
               <Link
                 href="/auth/register"
