@@ -20,7 +20,7 @@ import {
 
 // Repo-root `.env` is loaded from `index.ts` (local dev only). Lambda uses env + Secrets Manager (see lambda-handler.ts).
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, DeleteCommand, GetCommand, PutCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { CreateBucketCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { hostingGuideFor, normalizeHostingProvider, type HostingProvider } from "./serverHosting.js";
@@ -973,6 +973,7 @@ app.post("/imports/gtm-web-container", async (req, reply) => {
     return reply.code(400).send({ errors: parsed.error.issues });
   }
 
+  const organizationId = getOrganizationId(req);
   const importId = ulid();
   const now = new Date().toISOString();
   const rawKey = `imports/${importId}.json`;
@@ -992,6 +993,7 @@ app.post("/imports/gtm-web-container", async (req, reply) => {
       TableName: env.DDB_TABLE_IMPORTS,
       Item: {
         importId,
+        organizationId,
         projectId: parsed.data.projectId,
         sourceType: parsed.data.sourceType,
         rawBlobUri: `s3://${env.S3_BUCKET}/${rawKey}`,
@@ -1008,15 +1010,83 @@ app.post("/imports/gtm-web-container", async (req, reply) => {
   });
 });
 
-app.get("/imports", async () => {
+// Platform admins bypass tenant scoping so they can inspect any org's data
+// from the main /imports and /migrations endpoints.
+function isPlatformAdminRequest(req: FastifyRequest): boolean {
+  return req.auth?.authMethod === "session" && req.auth.user?.isPlatformAdmin === true;
+}
+
+// Resolve which org a listing request should read. Regular users are pinned
+// to their own org; platform admins may target another org via
+// ?organizationId=<id>, and default to their own when the param is omitted.
+function resolveListingOrganizationId(
+  req: FastifyRequest,
+  queryOrganizationId?: string
+): string {
+  const callerOrg = getOrganizationId(req);
+  if (queryOrganizationId && isPlatformAdminRequest(req)) {
+    return queryOrganizationId;
+  }
+  return callerOrg;
+}
+
+// Load an import record and enforce that it belongs to the caller's org
+// (platform admins bypass the check). Returns the item on success, or
+// sends 404 and returns null on failure so we don't leak existence across tenants.
+async function loadOwnedImport(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  importId: string
+): Promise<Record<string, unknown> | null> {
+  const organizationId = getOrganizationId(req);
+  const found = await ddbDoc.send(
+    new GetCommand({ TableName: env.DDB_TABLE_IMPORTS, Key: { importId } })
+  );
+  if (!found.Item) {
+    reply.code(404).send({ message: "Import not found" });
+    return null;
+  }
+  if (found.Item.organizationId !== organizationId && !isPlatformAdminRequest(req)) {
+    reply.code(404).send({ message: "Import not found" });
+    return null;
+  }
+  return found.Item as Record<string, unknown>;
+}
+
+async function loadOwnedRun(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  runId: string
+): Promise<Record<string, unknown> | null> {
+  const organizationId = getOrganizationId(req);
+  const run = await ddbDoc.send(
+    new GetCommand({ TableName: env.DDB_TABLE_RUNS, Key: { runId } })
+  );
+  if (!run.Item) {
+    reply.code(404).send({ message: "Run not found" });
+    return null;
+  }
+  if (run.Item.organizationId !== organizationId && !isPlatformAdminRequest(req)) {
+    reply.code(404).send({ message: "Run not found" });
+    return null;
+  }
+  return run.Item as Record<string, unknown>;
+}
+
+app.get("/imports", async (req) => {
+  const query = req.query as { organizationId?: string };
+  const organizationId = resolveListingOrganizationId(req, query.organizationId);
   try {
     const res = await ddbDoc.send(
-      new ScanCommand({
-        TableName: env.DDB_TABLE_IMPORTS
+      new QueryCommand({
+        TableName: env.DDB_TABLE_IMPORTS,
+        IndexName: "organizationId-createdAt-index",
+        KeyConditionExpression: "organizationId = :org",
+        ExpressionAttributeValues: { ":org": organizationId },
+        ScanIndexForward: false
       })
     );
-    const items = (res.Items ?? []).sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
-    return { items };
+    return { items: res.Items ?? [] };
   } catch (err) {
     if (isDdbResourceNotFound(err)) return { items: [] };
     throw err;
@@ -1025,21 +1095,17 @@ app.get("/imports", async () => {
 
 app.get("/imports/:importId", async (req, reply) => {
   const importId = (req.params as { importId: string }).importId;
-  const found = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_IMPORTS,
-      Key: { importId }
-    })
-  );
-  if (!found.Item) return reply.code(404).send({ message: "Import not found" });
-  return found.Item;
+  const item = await loadOwnedImport(req, reply, importId);
+  if (!item) return;
+  return item;
 });
 
 app.delete("/imports/:importId", async (req, reply) => {
   const importId = (req.params as { importId: string }).importId;
+  const item = await loadOwnedImport(req, reply, importId);
+  if (!item) return;
 
   try {
-    // Delete the import record from DynamoDB
     await ddbDoc.send(
       new DeleteCommand({
         TableName: env.DDB_TABLE_IMPORTS,
@@ -1058,37 +1124,25 @@ app.delete("/imports/:importId", async (req, reply) => {
 app.get("/imports/:importId/hosting-guide", async (req, reply) => {
   const importId = (req.params as { importId: string }).importId;
   const q = req.query as { provider?: string };
-  const found = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_IMPORTS,
-      Key: { importId }
-    })
-  );
-  if (!found.Item) return reply.code(404).send({ message: "Import not found" });
+  const item = await loadOwnedImport(req, reply, importId);
+  if (!item) return;
 
-  const fromItem = (found.Item as { hosting?: { provider?: string } }).hosting?.provider;
+  const fromItem = (item as { hosting?: { provider?: string } }).hosting?.provider;
   const provider: HostingProvider = normalizeHostingProvider(q.provider ?? fromItem ?? "undecided");
   const guide = hostingGuideFor(provider, {
-    webContainerLabel: String(found.Item.projectId ?? "your web GTM container")
+    webContainerLabel: String(item.projectId ?? "your web GTM container")
   });
   return {
-    hosting: (found.Item as { hosting?: unknown }).hosting ?? null,
+    hosting: (item as { hosting?: unknown }).hosting ?? null,
     guide
   };
 });
 
 app.get("/imports/:importId/container-status", async (req, reply) => {
   const importId = (req.params as { importId: string }).importId;
+  const item = await loadOwnedImport(req, reply, importId);
+  if (!item) return;
 
-  const found = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_IMPORTS,
-      Key: { importId }
-    })
-  );
-  if (!found.Item) return reply.code(404).send({ message: "Import not found" });
-
-  const item = found.Item as Record<string, unknown>;
   const ctx: ProvisioningContext = {
     importId,
     projectId: String(item.projectId ?? "unknown"),
@@ -1110,15 +1164,9 @@ app.patch("/imports/:importId/hosting", async (req, reply) => {
   const parsed = patchHostingSchema.safeParse(req.body ?? {});
   if (!parsed.success) return reply.code(400).send({ errors: parsed.error.issues });
 
-  const found = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_IMPORTS,
-      Key: { importId }
-    })
-  );
-  if (!found.Item) return reply.code(404).send({ message: "Import not found" });
+  const item = await loadOwnedImport(req, reply, importId);
+  if (!item) return;
 
-  const item = found.Item as Record<string, unknown>;
   const prev = (item.hosting as Record<string, string | undefined> | undefined) ?? {};
   const now = new Date().toISOString();
   const next: Record<string, string> = { ...prev } as Record<string, string>;
@@ -1174,23 +1222,19 @@ app.patch("/imports/:importId/hosting", async (req, reply) => {
 
 app.get("/migrations", async (req) => {
   const query = req.query as { organizationId?: string };
+  const organizationId = resolveListingOrganizationId(req, query.organizationId);
   try {
     const res = await ddbDoc.send(
-      new ScanCommand({
-        TableName: env.DDB_TABLE_RUNS
+      new QueryCommand({
+        TableName: env.DDB_TABLE_RUNS,
+        IndexName: "organizationId-createdAt-index",
+        KeyConditionExpression: "organizationId = :org",
+        FilterExpression: "attribute_not_exists(runRef)",
+        ExpressionAttributeValues: { ":org": organizationId },
+        ScanIndexForward: false
       })
     );
-    let items = res.Items ?? [];
-
-    // Filter by organizationId if provided
-    if (query.organizationId) {
-      items = items.filter((item) => item.organizationId === query.organizationId);
-    }
-
-    // Sort by createdAt descending
-    items.sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
-
-    return { items };
+    return { items: res.Items ?? [] };
   } catch (err) {
     if (isDdbResourceNotFound(err)) return { items: [] };
     throw err;
@@ -1204,15 +1248,9 @@ app.post("/migrations/:importId/run", async (req, reply) => {
     return reply.code(400).send({ errors: parsed.error.issues });
   }
 
-  const foundImport = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_IMPORTS,
-      Key: { importId }
-    })
-  );
-  if (!foundImport.Item) {
-    return reply.code(404).send({ message: "Import not found" });
-  }
+  const importItem = await loadOwnedImport(req, reply, importId);
+  if (!importItem) return;
+  const foundImport = { Item: importItem };
 
   const host = (foundImport.Item as { hosting?: Record<string, string | undefined> }).hosting;
   const prov = normalizeHostingProvider(host?.provider ?? "undecided");
@@ -1289,16 +1327,21 @@ app.post("/migrations/:importId/run", async (req, reply) => {
   return reply.code(202).send({ runId, status: "queued" });
 });
 
-app.get("/runs", async () => {
+app.get("/runs", async (req) => {
+  const query = req.query as { organizationId?: string };
+  const organizationId = resolveListingOrganizationId(req, query.organizationId);
   try {
     const res = await ddbDoc.send(
-      new ScanCommand({
+      new QueryCommand({
         TableName: env.DDB_TABLE_RUNS,
-        FilterExpression: "attribute_not_exists(runRef)"
+        IndexName: "organizationId-createdAt-index",
+        KeyConditionExpression: "organizationId = :org",
+        FilterExpression: "attribute_not_exists(runRef)",
+        ExpressionAttributeValues: { ":org": organizationId },
+        ScanIndexForward: false
       })
     );
-    const items = (res.Items ?? []).sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
-    return { items };
+    return { items: res.Items ?? [] };
   } catch (err) {
     if (isDdbResourceNotFound(err)) return { items: [] };
     throw err;
@@ -1307,30 +1350,16 @@ app.get("/runs", async () => {
 
 app.get("/migrations/:runId", async (req, reply) => {
   const runId = (req.params as { runId: string }).runId;
-  const run = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_RUNS,
-      Key: { runId }
-    })
-  );
-  if (!run.Item) return reply.code(404).send({ message: "Run not found" });
-  return run.Item;
+  const item = await loadOwnedRun(req, reply, runId);
+  if (!item) return;
+  return item;
 });
 
 app.delete("/migrations/:runId", async (req, reply) => {
   const runId = (req.params as { runId: string }).runId;
+  const item = await loadOwnedRun(req, reply, runId);
+  if (!item) return;
 
-  // Get the run to check if it exists
-  const run = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_RUNS,
-      Key: { runId }
-    })
-  );
-
-  if (!run.Item) return reply.code(404).send({ message: "Run not found" });
-
-  // Delete the run record
   await ddbDoc.send(
     new DeleteCommand({
       TableName: env.DDB_TABLE_RUNS,
@@ -1346,13 +1375,8 @@ app.delete("/migrations/:runId", async (req, reply) => {
 
 app.get("/migrations/:runId/report", async (req, reply) => {
   const runId = (req.params as { runId: string }).runId;
-  const run = await ddbDoc.send(
-    new GetCommand({
-      TableName: env.DDB_TABLE_RUNS,
-      Key: { runId }
-    })
-  );
-  if (!run.Item) return reply.code(404).send({ message: "Run not found" });
+  const item = await loadOwnedRun(req, reply, runId);
+  if (!item) return;
 
   const raw = await s3ReadObjectText(`runs/${runId}/report.json`);
   if (raw) {
@@ -1366,12 +1390,12 @@ app.get("/migrations/:runId/report", async (req, reply) => {
   return {
     runId,
     executiveSummary: "Migration report not available yet, or the worker run failed before writing artifacts.",
-    needsReview: run.Item.status === "needs_review",
+    needsReview: item.status === "needs_review",
     complianceFlags: { notes: [], piiRisk: "low", consentModeRecommended: true, piiFieldsSample: [] },
-    manualActions: run.Item.manualActions ?? [],
+    manualActions: item.manualActions ?? [],
     parityMatrix: [],
-    summaryCounts: run.Item.summaryCounts ?? { mappings: 0, warnings: 0, manualActions: 0 },
-    status: run.Item.status
+    summaryCounts: item.summaryCounts ?? { mappings: 0, warnings: 0, manualActions: 0 },
+    status: item.status
   };
 });
 
@@ -1469,6 +1493,8 @@ app.post("/migrations/:runId/deploy-approved-v2", async (req, reply) => {
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const runId = (req.params as { runId: string }).runId;
+  const ownedRun = await loadOwnedRun(req, reply, runId);
+  if (!ownedRun) return;
   const {
     approvedTagIds,
     clientContainerPath,
@@ -1687,6 +1713,8 @@ app.post("/migrations/:runId/deploy-variables", async (req, reply) => {
   if (!auth) return reply.code(401).send({ message: "Invalid GTM session" });
 
   const runId = (req.params as { runId: string }).runId;
+  const ownedRun = await loadOwnedRun(req, reply, runId);
+  if (!ownedRun) return;
   const { approvedVariableIds, serverContainerPath } = req.body as {
     approvedVariableIds: string[];
     serverContainerPath: string;
@@ -1902,6 +1930,8 @@ app.post("/migrations/:runId/deploy-variables", async (req, reply) => {
 
 app.get("/migrations/:runId/artifacts", async (req, reply) => {
   const runId = (req.params as { runId: string }).runId;
+  const ownedRun = await loadOwnedRun(req, reply, runId);
+  if (!ownedRun) return;
   const base = `s3://${env.S3_BUCKET}/runs/${runId}`;
   return {
     runId,

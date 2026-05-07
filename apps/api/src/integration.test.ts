@@ -141,4 +141,69 @@ describe('API Integration Tests', () => {
       expect(response.statusCode).toBe(401);
     });
   });
+
+  describe('Cross-tenant isolation', () => {
+    // Regression test: listings and :id lookups must not leak another org's
+    // data, and spoofing ?organizationId= as a non-admin must be ignored.
+    test('each org only sees its own imports and migrations', async () => {
+      const stamp = Date.now();
+      const registerOrg = async (suffix: string) => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/auth/register',
+          payload: {
+            email: `iso-${suffix}-${stamp}@example.com`,
+            name: `Iso ${suffix}`,
+            organizationName: `Iso Org ${suffix}`
+          }
+        });
+        expect(res.statusCode).toBe(201);
+        const body = res.json();
+        return { token: body.token as string, organizationId: body.organization.organizationId as string };
+      };
+
+      const a = await registerOrg('a');
+      const b = await registerOrg('b');
+
+      // Seed one import into org A.
+      const seed = await app.inject({
+        method: 'POST',
+        url: '/imports/gtm-web-container',
+        headers: { authorization: `Bearer ${a.token}` },
+        payload: {
+          sourceType: 'gtm-web-container',
+          projectId: 'iso-proj-a',
+          payload: { entities: { tags: [], triggers: [], variables: [] } }
+        }
+      });
+      expect(seed.statusCode).toBe(201);
+      const importId = seed.json().importId as string;
+
+      // Org A sees its import.
+      const listA = await app.inject({
+        method: 'GET',
+        url: '/imports',
+        headers: { authorization: `Bearer ${a.token}` }
+      });
+      expect(listA.statusCode).toBe(200);
+      expect(listA.json().items.some((i: { importId: string }) => i.importId === importId)).toBe(true);
+
+      // Org B must not see org A's imports, even when passing ?organizationId=A.
+      const listB = await app.inject({
+        method: 'GET',
+        url: `/imports?organizationId=${a.organizationId}`,
+        headers: { authorization: `Bearer ${b.token}` }
+      });
+      expect(listB.statusCode).toBe(200);
+      expect(listB.json().items.some((i: { importId: string }) => i.importId === importId)).toBe(false);
+
+      // Org B must get 404 when fetching org A's import by ID.
+      const getB = await app.inject({
+        method: 'GET',
+        url: `/imports/${importId}`,
+        headers: { authorization: `Bearer ${b.token}` }
+      });
+      expect(getB.statusCode).toBe(404);
+    });
+  });
 });
