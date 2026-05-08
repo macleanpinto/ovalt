@@ -197,13 +197,16 @@ awslocal dynamodb update-table \
 
 echo "✓ Updated tag-relay-imports table with organizationId GSI"
 
-# Update existing runs table to add organizationId GSI
+# Update existing runs table to add GSIs. LocalStack (like DynamoDB) only
+# allows one online index creation per UpdateTable call, so we add them
+# sequentially. Previous single-call version silently failed with
+# LimitExceededException, leaving the runs table without its
+# organizationId-createdAt-index.
 awslocal dynamodb update-table \
   --table-name tag-relay-runs \
   --attribute-definitions \
     AttributeName=organizationId,AttributeType=S \
     AttributeName=createdAt,AttributeType=S \
-    AttributeName=importId,AttributeType=S \
   --global-secondary-index-updates \
     '[{
       "Create": {
@@ -215,8 +218,17 @@ awslocal dynamodb update-table \
         "Projection": {"ProjectionType":"ALL"},
         "ProvisionedThroughput": {"ReadCapacityUnits":5,"WriteCapacityUnits":5}
       }
-    },
-    {
+    }]' \
+  --region $AWS_REGION \
+  --endpoint-url $AWS_ENDPOINT || echo "⚠ organizationId GSI may already exist"
+
+awslocal dynamodb update-table \
+  --table-name tag-relay-runs \
+  --attribute-definitions \
+    AttributeName=importId,AttributeType=S \
+    AttributeName=createdAt,AttributeType=S \
+  --global-secondary-index-updates \
+    '[{
       "Create": {
         "IndexName": "importId-createdAt-index",
         "KeySchema": [
@@ -228,7 +240,7 @@ awslocal dynamodb update-table \
       }
     }]' \
   --region $AWS_REGION \
-  --endpoint-url $AWS_ENDPOINT || echo "⚠ GSI may already exist or table doesn't exist yet"
+  --endpoint-url $AWS_ENDPOINT || echo "⚠ importId GSI may already exist"
 
 echo "✓ Updated tag-relay-runs table with tenant isolation GSIs"
 
