@@ -61,6 +61,24 @@ export interface AdminSignupsSeries {
   series: Array<{ date: string; count: number }>;
 }
 
+export interface AdminOrgMigrations {
+  organization: {
+    organizationId: string;
+    name: string;
+    slug?: string;
+    plan: string;
+    ownerEmail?: string;
+    createdAt?: string;
+  };
+  migrations: Array<
+    Run & {
+      deploymentStatus?: string;
+      deployedTagCount?: number;
+      lastDeployedAt?: string;
+    }
+  >;
+}
+
 export interface Organization {
   organizationId: string;
   name: string;
@@ -527,6 +545,10 @@ class APIClient {
 
   async getAdminSignups(days = 30): Promise<AdminSignupsSeries> {
     return this.request(`/admin/metrics/signups?days=${days}`);
+  }
+
+  async getAdminOrgMigrations(organizationId: string): Promise<AdminOrgMigrations> {
+    return this.request(`/admin/organizations/${encodeURIComponent(organizationId)}/migrations`);
   }
 }
 

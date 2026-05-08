@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth, ProtectedRoute } from '@/lib/auth-context';
 import { apiClient, AdminSummary, AdminOrgRow } from '@/lib/api-client';
@@ -142,7 +143,7 @@ export default function AdminDashboard() {
                   <div>
                     <h2 className="text-lg font-semibold text-white">Organizations</h2>
                     <p className="text-sm text-zinc-500">
-                      Sorted by tags deployed. {summary?.organizations.length ?? 0} total.
+                      Sorted by tags deployed. {summary?.organizations.length ?? 0} total. Click a row to view that org&apos;s migrations.
                     </p>
                   </div>
                 </div>
@@ -212,24 +213,35 @@ function OrgTable({ rows }: { rows: AdminOrgRow[] }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-white/[0.06]">
-          {rows.map(row => (
-            <tr key={row.organizationId} className="text-zinc-200">
-              <td className="py-3 pr-4">
-                <div className="font-medium text-white">{row.name}</div>
-                {row.slug ? <div className="text-xs text-zinc-500">{row.slug}</div> : null}
-              </td>
-              <td className="py-3 pr-4">
-                <span className={`rounded-full border px-2 py-0.5 text-xs font-medium capitalize ${planClass(row.plan)}`}>
-                  {row.plan}
-                </span>
-              </td>
-              <td className="py-3 pr-4 text-zinc-400">{row.ownerEmail ?? '—'}</td>
-              <td className="py-3 pr-4 text-right tabular-nums">{row.imports.toLocaleString()}</td>
-              <td className="py-3 pr-4 text-right tabular-nums">{row.migrations.toLocaleString()}</td>
-              <td className="py-3 pr-4 text-right tabular-nums">{row.tagsDeployed.toLocaleString()}</td>
-              <td className="py-3 pr-4 text-zinc-400">{fmtDate(row.lastActivityAt)}</td>
-            </tr>
-          ))}
+          {rows.map(row => {
+            const href = `/admin/organizations/${encodeURIComponent(row.organizationId)}/migrations`;
+            return (
+              <tr
+                key={row.organizationId}
+                className="group cursor-pointer text-zinc-200 transition-colors hover:bg-white/[0.03]"
+                onClick={() => {
+                  window.location.href = href;
+                }}
+              >
+                <td className="py-3 pr-4">
+                  <Link href={href} className="block">
+                    <div className="font-medium text-white group-hover:text-[#41ffaf]">{row.name}</div>
+                    {row.slug ? <div className="text-xs text-zinc-500">{row.slug}</div> : null}
+                  </Link>
+                </td>
+                <td className="py-3 pr-4">
+                  <span className={`rounded-full border px-2 py-0.5 text-xs font-medium capitalize ${planClass(row.plan)}`}>
+                    {row.plan}
+                  </span>
+                </td>
+                <td className="py-3 pr-4 text-zinc-400">{row.ownerEmail ?? '—'}</td>
+                <td className="py-3 pr-4 text-right tabular-nums">{row.imports.toLocaleString()}</td>
+                <td className="py-3 pr-4 text-right tabular-nums">{row.migrations.toLocaleString()}</td>
+                <td className="py-3 pr-4 text-right tabular-nums">{row.tagsDeployed.toLocaleString()}</td>
+                <td className="py-3 pr-4 text-zinc-400">{fmtDate(row.lastActivityAt)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

@@ -316,6 +316,71 @@ describe("E2E: platform admin dashboard", () => {
     expect(res.json().series).toHaveLength(7);
   });
 
+  test("GET /admin/organizations/:id/migrations → 401 without auth", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/admin/organizations/${adminOrgId}/migrations`
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  test("GET /admin/organizations/:id/migrations → 403 for non-admin session", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/admin/organizations/${adminOrgId}/migrations`,
+      headers: { authorization: `Bearer ${plainToken}` }
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  test("GET /admin/organizations/:id/migrations → 404 for unknown org", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/organizations/does-not-exist/migrations",
+      headers: { authorization: `Bearer ${adminToken}` }
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  test("GET /admin/organizations/:id/migrations → 200 returns that org's runs, newest first, stubs excluded", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/admin/organizations/${adminOrgId}/migrations`,
+      headers: { authorization: `Bearer ${adminToken}` }
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json();
+
+    expect(body.organization.organizationId).toBe(adminOrgId);
+    expect(typeof body.organization.name).toBe("string");
+    expect(body.organization.ownerEmail).toContain("@");
+
+    expect(Array.isArray(body.migrations)).toBe(true);
+    // Admin org got 3 real runs seeded (2 with tags, 1 without). The idempotency stub must not appear.
+    expect(body.migrations.length).toBe(3);
+    expect(body.migrations.every((r: any) => r.organizationId === adminOrgId)).toBe(true);
+    expect(body.migrations.every((r: any) => !r.runRef)).toBe(true);
+
+    // Newest first
+    for (let i = 1; i < body.migrations.length; i++) {
+      expect(body.migrations[i - 1].createdAt >= body.migrations[i].createdAt).toBe(true);
+    }
+  });
+
+  test("GET /admin/organizations/:id/migrations isolates orgs", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/admin/organizations/${plainOrgId}/migrations`,
+      headers: { authorization: `Bearer ${adminToken}` }
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json();
+    expect(body.organization.organizationId).toBe(plainOrgId);
+    expect(body.migrations.length).toBe(1);
+    expect(body.migrations[0].organizationId).toBe(plainOrgId);
+    expect(body.migrations[0].deployedTagCount).toBe(5);
+  });
+
   test("/auth/me reflects isPlatformAdmin flag", async () => {
     const adminMe = await app.inject({
       method: "GET",

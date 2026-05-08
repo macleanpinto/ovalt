@@ -1,328 +1,163 @@
 # CLAUDE.md
 
-Project memory and operating guide for AI coding sessions in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-- **Project name:** Tag Relay
-- **Current status:** Production-ready, ready for AWS deployment
-- **Goal:** Build a tool that helps marketing and analytics teams migrate client-side tags to server-side tagging with minimal manual work and low risk.
+**Tag Relay** (domain: `ovalt.org`) is a SaaS tool that migrates Google Tag Manager setups from client-side to server-side tagging. Primary users are marketing/analytics engineers managing GTM/GA4/Meta. Migration correctness is the top quality attribute — prefer clear, auditable transformations over opaque automation, and flag uncertain mappings for human review rather than guessing.
 
-## Source Context
+Additional context: `README.md` (setup/deploy), `docs/system-design.md` (architecture), `TODO.md` (pending work), `LOCALSTACK_SAFETY.md` (local-vs-AWS guardrails).
 
-- Architecture: `docs/system-design.md`
-- Setup, deploy, local dev: `README.md`
-- Pending work: `TODO.md`
+## Commands
 
-## Primary User
+This is an npm workspaces monorepo (`apps/api`, `apps/worker`, `apps/web-nextjs`, `infra/cdk`). Root scripts fan out to workspaces.
 
-- Marketing or analytics engineers managing GTM/GA4/Meta setups.
-- They need migration speed, accuracy, and confidence without heavy engineering support.
+```bash
+# Install
+npm install
 
-## Product Priorities
+# Local dev — requires LocalStack from docker-compose
+docker compose up -d
+./infra/localstack/init-auth.sh            # create DynamoDB tables in LocalStack
+npm run dev:api                            # Fastify API on :3001
+npm run dev:worker                         # SQS consumer
+npm run dev:web                            # Next.js on :5173
+npm run dev:all                            # all three in one terminal
 
-### Must-Haves
+# Build / lint / test (all workspaces)
+npm run build
+npm run lint                               # each workspace uses `tsc --noEmit`
+npm test                                   # vitest run, per workspace
 
-1. Automated conversion from client-side setup to server-side configuration.
-2. Minimal frontend code changes.
-3. Validation checks comparing client-side vs server-side event consistency.
-4. Fast guided setup experience.
-5. Privacy/compliance-first defaults (GDPR/CCPA aware).
+# Single test file
+cd apps/api && npm test -- path/to/file.test.ts
+cd apps/worker && npm test -- path/to/file.test.ts
 
-### Nice-to-Haves
+# E2E GTM deployment (hits real GTM containers; needs OAuth — see below)
+cd apps/api && npm test src/e2e-gtm-deployment.test.ts
+cd apps/api && npm run test:e2e            # wraps E2E with OAuth bootstrap
+```
 
-- Monitoring dashboards.
-- Advanced routing/transforms and anomaly detection.
+OAuth tokens for E2E tests are cached in `apps/api/.gtm-tokens.json` — no re-auth needed between runs. See `apps/api/E2E_TEST_QUICKSTART.md`.
 
-### Architecture Notes
+## High-Level Architecture
 
-- **Organizations**: Backend uses organizationId for data filtering, but UI hides this complexity from users. Each user has their own workspace. Multi-tenant agency features are not currently implemented.
+Serverless-only. Three workloads plus infra:
 
-## Technical Working Agreements
+```
+Web (Next.js SSR)  →  API (Fastify on Lambda)  →  SQS  →  Worker (Lambda)
+                              │                              │
+                              └──── DynamoDB · S3 · Secrets Manager ────┘
+```
 
-- Keep implementations incremental and testable.
-- Prefer clear, auditable transformations over opaque magic.
-- Treat migration correctness as the top quality attribute.
-- Avoid destructive operations unless explicitly requested.
-- Keep docs in sync with code changes.
-- Prefer provider documentation evidence when assigning migration confidence.
+**Request/migration flow:**
+1. User uploads a GTM container JSON via the web app → API stores metadata in DynamoDB and the raw payload in S3 (`imports` table, `uploaded` status).
+2. User triggers a run → API writes a `runs` row (`queued`) and pushes `{ importId, runId }` onto SQS.
+3. Worker (`apps/worker/src/processor.ts` → `migration/pipeline.ts`) consumes the message:
+   - `loadImport` → `canonical` normalizes container → `engine/applyRuleset` categorizes tags/triggers/variables → `validation` + `provisioning` checks → `buildReport` + `markdown`.
+   - Writes `runs/{runId}/report.json`, `report.md`, `server_blueprint.json` to S3 and updates the run row.
+4. Web polls the run; on user confirmation, the API calls `gtm-migration-deploy.ts` to create workspaces/tags in the user's GTM server container via the GTM API.
 
-## Testing & Autonomous Work Permissions
+**Tenancy:** Every DynamoDB row and artifact is scoped by `organizationId`. Backend enforces this; the UI treats it as invisible (each user effectively has one workspace — multi-tenant agency features are not implemented).
 
-When working on tests and fixing issues, you may work autonomously without requesting approval for:
-- **Running tests**: `npm test`, `npm run test:e2e`, vitest commands
-- **Reading files**: Read, Grep, Glob operations to diagnose failures
-- **Fixing test code**: Edits to `*.test.ts`, `*.spec.ts`, test scripts
-- **Fixing production code**: Edits to implementation files when tests reveal bugs
-- **Updating documentation**: Changes to `*.md` files
-- **Safe bash commands**: cat, echo, grep, ls, tail, head, git status/diff
+**Auth:** Cookie-session JWTs issued by `apps/api/src/auth/` (Google/GitHub OAuth via `oauth-routes.ts`, API keys for programmatic access). GTM access uses a separate OAuth client/token stored per-user. Platform admin is gated by `isPlatformAdmin: true` on the user row (no UI; set via DynamoDB — see "Granting platform admin" below).
 
-When test failures occur, work autonomously:
-1. Run tests to identify failures
-2. Read source files to understand root cause
-3. Fix test code OR production code as needed
-4. Re-run tests
-5. Repeat until all tests pass
-6. Document what was fixed
-7. Report final results
+**Key directories:**
+- `apps/api/src/` — Fastify server. `server.ts` has the route registrations; `auth/`, `admin-routes.ts`, `gtm-*.ts` implement domains. `lambda-handler.ts` is the Lambda entrypoint (reuses the Fastify instance across invocations).
+- `apps/worker/src/migration/engine/` — rule-based migration. `supportedTypes.ts` is the whitelist of auto-deployable tag types; mappings are flagged `provisional` or `missingRequired` so the UI can gate on review. `rules-*.ts` files are declarative.
+- `apps/web-nextjs/src/app/` — Next.js App Router (dashboard, import flow, migrations, admin, settings/team, invites).
+- `infra/cdk/lib/` — four CDK stacks: `database-stack`, `api-stack`, `web-stack`, `domain-stack`.
 
-**User instruction:** "you can even modify code to fix issues"
+## GTM Migration — Critical Code Rules
 
-OAuth tokens for E2E tests are cached in `apps/api/.gtm-tokens.json` - no re-authentication needed between runs.
+This is a **generic** migration system. Deployment/migration code must work for any GTM structure without hardcoded assumptions.
 
-See `apps/api/E2E_TEST_QUICKSTART.md` for testing details and `apps/api/TEST_SESSION_SUMMARY.md` for last test session results.
+**In deployment/migration code (`apps/api/src/gtm-migration-deploy.ts`, `apps/api/src/server.ts` deploy endpoints, `apps/worker/src/deployment-processor.ts`, `apps/worker/src/migration/pipeline.ts`):**
 
-## GTM Migration System Principles
-
-This is a **generic migration system** for Google Tag Manager entities. The deployment/migration code must work for ANY GTM structure without hardcoded assumptions.
-
-### CRITICAL RULES for Deployment/Migration Code:
-
-**NEVER** check tag/trigger/variable NAMES for patterns when determining how to migrate:
-- ❌ NO: `if (tagName.includes('GA4'))` or `if (tagName.startsWith('CE -'))`
-- ❌ NO: `if (/facebook|meta|pixel/.test(tagName))`
-- ❌ NO: String matching on names to determine tag behavior
-
-**ALWAYS** use TYPE-BASED mapping:
-- ✅ YES: `const serverType = CLIENT_TYPE_TO_SERVER_TYPE[clientTag.type]`
-- ✅ YES: Map GTM type IDs (`gaawe` → `sgtmgaaw`, `awct` → `sgtmgads`)
-- ✅ YES: Use declarative lookup tables for type mappings
-
-**ALWAYS** copy ALL properties from source entities:
-- ✅ YES: Copy entire `parameter` array from client to server
-- ✅ YES: Copy `consentSettings`, `priority`, `scheduleStartMs`, all properties
-- ❌ NO: Extracting specific parameters by key (like `parameters['measurementId']`)
-- ❌ NO: Filtering or transforming parameters during migration
-
-**Let GTM API validate structures:**
-- Don't pre-filter properties you think might not be supported
-- Copy the structure as-is and let GTM API return errors if something is incompatible
-- Only transform type IDs when necessary (client type → server type)
-
-### When Pattern Matching IS Acceptable:
-
-Pattern matching is ONLY acceptable in:
-- **Analysis/categorization code** (`rulesV1.ts`, `matcher.ts`): Identifying what type of tag it is for reporting
-- **Rule definition files**: Declarative rules that match conditions for scoring/categorization
-
-Pattern matching is NOT acceptable in:
-- **Deployment code** (`server.ts` deployment endpoints): Copying tag structures to server containers
-- **Migration transformation code**: Converting client entities to server entities
-
-### Example - The Right Way:
+- **NEVER** inspect tag/trigger/variable **names** to decide behavior (no `tagName.includes('GA4')`, no `/facebook|meta/.test(name)`).
+- **ALWAYS** use type-based mapping via a lookup table. GTM type IDs map client → server (e.g. `gaawe → sgtmgaaw`, `googtag → sgtmgaaw`, `awct → sgtmgads`).
+- **ALWAYS** copy all properties from source entities: the full `parameter` array, `consentSettings`, `priority`, `scheduleStartMs`, etc. Do not pre-filter parameters you think the server might not accept — let the GTM API return errors.
+- Only transform type IDs when required (client type → server type).
 
 ```typescript
-// ✅ CORRECT: Type-based mapping
+// Correct: type-based, non-destructive copy
 const CLIENT_TAG_TYPE_TO_SERVER_TYPE: Record<string, string> = {
-  'gaawe': 'sgtmgaaw',   // GA4 Event -> Server GA4
-  'googtag': 'sgtmgaaw', // Google tag -> Server GA4
-  'awct': 'sgtmgads',    // Ads Conversion -> Server Ads
-  // ... etc
+  gaawe: "sgtmgaaw",    // GA4 Event → Server GA4
+  googtag: "sgtmgaaw",  // Google tag → Server GA4
+  awct: "sgtmgads"      // Ads Conversion → Server Ads
 };
-
 const serverType = CLIENT_TAG_TYPE_TO_SERVER_TYPE[clientTag.type];
-
-// Copy ALL properties
-const tagConfig = {
-  type: serverType,
-  parameter: clientTag.parameter,  // Copy all, no filtering
-  // Copy all other properties
-};
-if (clientTag.consentSettings) tagConfig.consentSettings = clientTag.consentSettings;
-if (clientTag.priority) tagConfig.priority = clientTag.priority;
-// ... etc
+const tagConfig = { type: serverType, parameter: clientTag.parameter /* + all other props */ };
 ```
 
-```typescript
-// ❌ WRONG: Name-based logic
-if (tagName.includes('GA4') || tagName.includes('google analytics')) {
-  // Deploy as GA4
-  tagConfig = { type: 'sgtmgaaw', ... };
-} else if (tagName.includes('Meta') || tagName.includes('Facebook')) {
-  // Deploy as Meta
-  ...
-}
+**Where pattern-matching IS acceptable:** analysis/categorization/reporting only — `apps/worker/src/migration/engine/rules-*.ts`, `matcher.ts`. Never in deployment code.
+
+## Testing Before Deployment
+
+Changes to any of these files **must** pass local E2E tests before being deployed:
+- `apps/api/src/gtm-migration-deploy.ts`
+- `apps/api/src/server.ts` (deployment endpoints)
+- `apps/worker/src/deployment-processor.ts`
+- `apps/worker/src/migration/pipeline.ts`
+
+Procedure: `docker compose up -d` → `npm run dev:worker` → `cd apps/api && npm test src/e2e-gtm-deployment.test.ts` → verify changes in the Ovalt GTM containers (client `accounts/6347965337/containers/248366882`, server `accounts/6347965337/containers/248342708`). Do not skip even for one-line changes — deployment logic regressions are high blast-radius.
+
+## Autonomous Work Permissions
+
+When fixing failing tests you may work without approval: running `npm test` / `npm run test:e2e`, reading files, editing test code, editing production code when tests reveal bugs, editing docs, and safe bash (`cat`/`grep`/`ls`/`git status`/`git diff`). User's durable instruction: "you can even modify code to fix issues."
+
+## AWS Deployment (MANDATORY)
+
+**Production**: Account `549116506406`, Profile `tagrelay-prod`, Region `eu-north-1`, Domain `ovalt.org`. CloudFront + apex cert live in `us-east-1` (CDK handles this); core app resources are `eu-north-1`.
+
+**Always use the scripts** (they set profile/region and run the required Lambda bundle build):
+
+```bash
+AWS_PROFILE=tagrelay-prod ./scripts/deploy-production.sh   # full
+./scripts/deploy-api-only.sh                               # API Lambda
+./scripts/deploy-worker-only.sh                            # Worker Lambda
 ```
 
-## Finalized Technical Baseline
+**Before deploying, always verify identity:**
+```bash
+AWS_PROFILE=tagrelay-prod aws sts get-caller-identity   # Account must be 549116506406
+```
 
-- **Frontend:** Next.js 14 with SSR (App Router).
-- **Backend:** Node.js 20 + TypeScript + Fastify.
-- **Database:** DynamoDB (8 tables for multi-tenancy).
-- **Queue:** SQS + Lambda worker service.
-- **Storage:** S3 buckets (artifacts + static assets).
-- **Infrastructure:** AWS CDK (TypeScript) for deployment.
-- **Local Dev:** Docker Compose + LocalStack.
+**After deploying, always check:**
+```bash
+AWS_PROFILE=tagrelay-prod aws lambda get-function \
+  --function-name tag-relay-worker-production --region eu-north-1 \
+  --query 'Configuration.[LastModified, Handler, Timeout]'
+AWS_PROFILE=tagrelay-prod aws logs tail /aws/lambda/tag-relay-worker-production \
+  --region eu-north-1 --since 5m
+```
 
-## Finalized Product/Architecture Decisions
+**Hard rules — do not violate without explicit user instruction:**
+- Never deploy to `us-east-1` for app resources (only the apex cert lives there, via CDK).
+- Never deploy to account `851725425279` — wrong account.
+- Never run ad-hoc `aws lambda update-function-code` — always go through the scripts (they build the Lambda bundle via `apps/{api,worker}/build-lambda.js`).
+- If the user says "deploy" without specifying what, ask: full, API only, Worker only, or Web only.
 
-1. Migration must create or guide creation of a GTM server-side container.
-2. Output format is hybrid: automated artifacts plus scripts/checklists for manual steps.
-3. Only tag types in the supported whitelist can be auto-deployed (see `apps/worker/src/migration/engine/supportedTypes.ts`). Mappings are flagged `provisional` or `missingRequired` so the UI can gate deployment on user review.
-4. Architecture is SaaS-first and multi-tenant.
-5. Extensibility must support future provider adapters/mapping packs (for example Taggers) without redesigning core flow.
+## LocalStack Safety
 
-## Repository Conventions
+Local dev must use LocalStack (`http://localhost:4566`) — never real AWS. `apps/api/src/server.ts` and `apps/worker/src/processor.ts` enforce this: when `ENVIRONMENT=local` or `NODE_ENV=development`, they force `AWS_ENDPOINT=http://localhost:4566` and override credentials to `test`/`test`, and throw if anything else is configured. Do not weaken these guards.
 
-- Implementation code is under `apps/` (api, worker, web-nextjs).
-- Migration logic and validation logic are in separate modules within `apps/worker/src/migration/`.
-- Infrastructure code is in `infra/cdk/` (AWS CDK stacks).
-- Documentation is in root and `docs/` directory.
+## Granting Platform Admin
 
-## Current Status
-
-✅ **Production Deployed (2026-04-02):**
-- API with 30+ endpoints (auth, organizations, imports, migrations)
-- Worker with rule-based migration engine (30+ production rules)
-- Next.js SSR web app with OAuth integration
-- Multi-tenant authentication and RBAC
-- Container provisioning verification
-- Privacy Policy and Terms of Service pages
-- AWS CDK infrastructure (4 stacks: Database, API, Web, Domain)
-- Production URLs:
-  - **Website**: https://ovalt.org
-  - **API**: https://api.ovalt.org
-  - **Privacy**: https://ovalt.org/privacy
-  - **Terms**: https://ovalt.org/terms
-
-## Granting platform admin
-
-The `/admin` dashboard is gated by `isPlatformAdmin: true` on the user record. There is no UI to grant this; set it manually:
+The `/admin` dashboard is gated by `isPlatformAdmin: true`. No UI; set manually:
 
 ```bash
 AWS_PROFILE=tagrelay-prod aws dynamodb update-item \
-  --table-name tag-relay-users-production \
-  --region eu-north-1 \
+  --table-name tag-relay-users-production --region eu-north-1 \
   --key '{"userId":{"S":"<your-user-id>"}}' \
   --update-expression "SET isPlatformAdmin = :t" \
   --expression-attribute-values '{":t":{"BOOL":true}}'
 ```
 
-Look up your `userId` by email via the `email-index` GSI or from the `/auth/me` response after logging in.
+Look up `userId` by email via the `email-index` GSI or from `/auth/me`.
 
-## Production configuration
+## Runtime Notes
 
-Deploy, OAuth redirect URIs, and regions: **`README.md`**. Architecture: **`docs/system-design.md`**.
-
-**Runtime notes:** Lambda may reuse the Fastify instance; env changes need a new deploy or function update. Web OAuth flow uses cache-control on auth URLs; `/auth/callback` skips the initial auth check to avoid races.
-
-## AWS Deployment Requirements (MANDATORY)
-
-**CRITICAL**: When deploying to AWS, you MUST follow these requirements exactly. Do NOT deviate from these procedures.
-
-### Production AWS Configuration
-
-- **AWS Account**: 549116506406
-- **AWS Profile**: `tagrelay-prod` (ALWAYS use this profile)
-- **AWS Region**: `eu-north-1` (ALWAYS use this region, NOT us-east-1!)
-- **Domain**: ovalt.org
-
-### Deployment Commands (ALWAYS USE THESE)
-
-**Full Production Deployment:**
-```bash
-AWS_PROFILE=tagrelay-prod ./scripts/deploy-production.sh
-```
-
-**Quick Worker Lambda Update:**
-```bash
-./scripts/deploy-worker-only.sh
-# This script automatically uses AWS_PROFILE=tagrelay-prod and region=eu-north-1
-```
-
-**Quick API Lambda Update:**
-```bash
-./scripts/deploy-api-only.sh
-# This script automatically uses AWS_PROFILE=tagrelay-prod and region=eu-north-1
-```
-
-### Testing Requirements (MANDATORY BEFORE DEPLOYMENT)
-
-**CRITICAL**: Any changes to migration or deployment code (API or Worker) **MUST** be tested locally with E2E tests before deploying to production.
-
-**Testing Procedure:**
-1. Ensure LocalStack is running: `docker compose up -d`
-2. Start the worker: `npm run dev:worker` (in separate terminal or background)
-3. Run E2E deployment test: `cd apps/api && npm test src/e2e-gtm-deployment.test.ts`
-4. Verify changes in Ovalt GTM containers:
-   - Client container: accounts/6347965337/containers/248366882
-   - Server container: accounts/6347965337/containers/248342708
-5. Check created workspaces and tags match expected behavior
-6. **ONLY deploy if E2E tests pass and GTM containers show correct changes**
-
-**What to Verify in GTM Containers:**
-- Client-side tags modified/paused correctly
-- Server-side tags created with correct types
-- Triggers created properly
-- Variables copied to server workspace
-- No unexpected tags or modifications
-
-**Files Requiring E2E Testing Before Deployment:**
-- `apps/api/src/gtm-migration-deploy.ts` (main deployment logic)
-- `apps/api/src/server.ts` (deployment endpoints)
-- `apps/worker/src/deployment-processor.ts` (worker deployment handler)
-- `apps/worker/src/migration/pipeline.ts` (migration logic)
-
-**Never skip testing for "small changes"** - even one-line changes to deployment logic can break production deployments.
-
-### Deployment Rules (MUST FOLLOW)
-
-1. **ALWAYS verify account and region BEFORE deploying:**
-   ```bash
-   AWS_PROFILE=tagrelay-prod aws sts get-caller-identity
-   # Expected Account: 549116506406
-   ```
-
-2. **NEVER deploy manually with AWS CLI commands** unless explicitly instructed by the user to do so. ALWAYS use the deployment scripts in `scripts/` directory.
-
-3. **NEVER deploy to us-east-1**. Production is in **eu-north-1**.
-
-4. **NEVER deploy to AWS account 851725425279**. That is the wrong account.
-
-5. **ALWAYS use AWS_PROFILE=tagrelay-prod** for all AWS operations.
-
-6. **Build Lambda bundles BEFORE deploying:**
-   ```bash
-   # For Worker
-   cd apps/worker && npm run build:lambda
-   
-   # For API
-   cd apps/api && npm run build:lambda
-   ```
-
-7. **If user asks to "deploy" without specifying what**, ask which component:
-   - Full deployment (all stacks)
-   - Worker Lambda only
-   - API Lambda only
-   - Web app only
-
-8. **After deployment, ALWAYS verify:**
-   ```bash
-   # Check Worker Lambda
-   AWS_PROFILE=tagrelay-prod aws lambda get-function \
-     --function-name tag-relay-worker-production \
-     --region eu-north-1 \
-     --query 'Configuration.[LastModified, Handler, Timeout]'
-   
-   # Check logs
-   AWS_PROFILE=tagrelay-prod aws logs tail \
-     /aws/lambda/tag-relay-worker-production \
-     --region eu-north-1 \
-     --since 5m
-   ```
-
-### What NOT to Do
-
-❌ **NEVER** run individual `aws lambda update-function-code` commands unless using the deployment scripts
-❌ **NEVER** assume us-east-1 is the production region
-❌ **NEVER** deploy without verifying the AWS account first
-❌ **NEVER** skip using the deployment scripts (they have important build steps)
-❌ **NEVER** deploy to multiple regions (production is ONLY in eu-north-1)
-
-### When to Deviate
-
-You may ONLY deviate from these deployment requirements if:
-1. The user explicitly instructs you to deploy to a different account/region, OR
-2. The user explicitly instructs you to use manual AWS CLI commands
-
-In all other cases, ALWAYS use the deployment scripts with the correct profile and region.
+- Lambda reuses the Fastify instance across invocations — env var changes require a redeploy/function update, not just a cold start.
+- Web OAuth flow uses cache-control on auth URLs; `/auth/callback` intentionally skips the initial auth check to avoid races.
+- `apps/worker/src/migration/engine/supportedTypes.ts` is the single source of truth for auto-deployable tag types — mappings outside it should emit `provisional` or `missingRequired` so the UI blocks deployment until reviewed.

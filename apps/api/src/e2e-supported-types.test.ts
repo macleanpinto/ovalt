@@ -9,15 +9,20 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { S3Client, PutObjectCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { buildApp } from "./server";
 
 const S3_BUCKET = "tag-relay-artifacts";
+const TABLE_RUNS = "tag-relay-runs";
 
 describe("E2E: deploy endpoint supported-type guardrail", () => {
   let app: FastifyInstance;
   let s3: S3Client;
+  let ddb: DynamoDBDocumentClient;
   let gtmSessionId: string;
   let authToken: string;
+  let organizationId: string;
 
   beforeAll(async () => {
     process.env.ENVIRONMENT = "local";
@@ -46,6 +51,14 @@ describe("E2E: deploy endpoint supported-type guardrail", () => {
       /* bucket may already exist */
     });
 
+    ddb = DynamoDBDocumentClient.from(
+      new DynamoDBClient({
+        region: "us-east-1",
+        endpoint: "http://localhost:4566",
+        credentials: { accessKeyId: "test", secretAccessKey: "test" }
+      })
+    );
+
     // Register a user to get a Bearer token for the authenticated deploy endpoint.
     const email = `supported-types-${Date.now()}@example.com`;
     const regRes = await app.inject({
@@ -55,6 +68,7 @@ describe("E2E: deploy endpoint supported-type guardrail", () => {
     });
     expect(regRes.statusCode, regRes.body).toBe(201);
     authToken = regRes.json().token;
+    organizationId = regRes.json().organization.organizationId;
 
     // Create a test GTM session so the GTM OAuth check passes (the token is
     // never exercised because the guardrail rejects before any GTM API call).
@@ -86,6 +100,20 @@ describe("E2E: deploy endpoint supported-type guardrail", () => {
         Key: `runs/${runId}/report.json`,
         Body: JSON.stringify(report),
         ContentType: "application/json"
+      })
+    );
+    // The deploy endpoint now calls loadOwnedRun (scoping added in commit 7bc349a),
+    // so a matching runs row scoped to this test's organizationId must exist.
+    await ddb.send(
+      new PutCommand({
+        TableName: TABLE_RUNS,
+        Item: {
+          runId,
+          organizationId,
+          status: "completed",
+          rulesetVersion: "v1",
+          createdAt: new Date().toISOString()
+        }
       })
     );
   }

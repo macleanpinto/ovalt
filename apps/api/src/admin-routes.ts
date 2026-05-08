@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
-import { ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, QueryCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { requirePlatformAdmin } from "./auth/platform-admin.js";
 
 export type AdminRoutesConfig = {
@@ -149,6 +149,69 @@ export function registerAdminRoutes(app: FastifyInstance, config: AdminRoutesCon
       organizations
     };
   });
+
+  app.get<{ Params: { organizationId: string } }>(
+    "/admin/organizations/:organizationId/migrations",
+    { preHandler: requirePlatformAdmin },
+    async (req, reply) => {
+      reply.header("Cache-Control", "no-store");
+
+      const { organizationId } = req.params;
+
+      const orgRes = await ddb.send(
+        new GetCommand({ TableName: organizationsTable, Key: { organizationId } })
+      );
+      if (!orgRes.Item) {
+        return reply.code(404).send({ error: "Not Found", message: "Organization not found" });
+      }
+      const org = orgRes.Item;
+
+      const ownerId = typeof org.ownerId === "string" ? org.ownerId : undefined;
+      let ownerEmail: string | undefined;
+      if (ownerId) {
+        const ownerRes = await ddb.send(
+          new GetCommand({
+            TableName: usersTable,
+            Key: { userId: ownerId },
+            ProjectionExpression: "email"
+          })
+        );
+        if (ownerRes.Item && typeof ownerRes.Item.email === "string") {
+          ownerEmail = ownerRes.Item.email;
+        }
+      }
+
+      const items: Record<string, any>[] = [];
+      let exclusiveStartKey: Record<string, any> | undefined = undefined;
+      do {
+        const res: any = await ddb.send(
+          new QueryCommand({
+            TableName: runsTable,
+            IndexName: "organizationId-createdAt-index",
+            KeyConditionExpression: "organizationId = :org",
+            FilterExpression: "attribute_not_exists(runRef)",
+            ExpressionAttributeValues: { ":org": organizationId },
+            ScanIndexForward: false,
+            ExclusiveStartKey: exclusiveStartKey
+          })
+        );
+        if (res.Items) items.push(...res.Items);
+        exclusiveStartKey = res.LastEvaluatedKey;
+      } while (exclusiveStartKey);
+
+      return {
+        organization: {
+          organizationId,
+          name: typeof org.name === "string" ? org.name : "(unnamed)",
+          slug: typeof org.slug === "string" ? org.slug : undefined,
+          plan: typeof org.plan === "string" ? org.plan : "free",
+          ownerEmail,
+          createdAt: typeof org.createdAt === "string" ? org.createdAt : undefined
+        },
+        migrations: items
+      };
+    }
+  );
 
   app.get<{ Querystring: { days?: string } }>(
     "/admin/metrics/signups",
