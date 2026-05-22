@@ -29,7 +29,8 @@ function readEnvVarFromRootFiles(key) {
 
 const nextPublicGtmId =
   (process.env.NEXT_PUBLIC_GTM_ID && process.env.NEXT_PUBLIC_GTM_ID.trim()) ||
-  readEnvVarFromRootFiles('NEXT_PUBLIC_GTM_ID').trim();
+  readEnvVarFromRootFiles('NEXT_PUBLIC_GTM_ID').trim() ||
+  'GTM-NX4P4R3P';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
