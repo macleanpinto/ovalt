@@ -486,9 +486,20 @@ async function deployMigrationImpl(
   // - Google Ads tags (awct, sp): CONVERT to GA4 Event tags with google_ads_* event names
   log.info({ serverUrl: request.serverContainerUrl }, 'Modifying tags for server-side migration');
 
-  // Use the GA4 - ID variable for measurementId in converted tags
-  // This variable should exist in the container and will be auto-detected
-  const measurementIdVariable = '{{GA4 - ID}}';
+  // Resolve the measurement ID from the actual googtag tag in the container.
+  // Use originalTags (all workspace tags) rather than tagsByType (approved only) so
+  // this works even when the googtag wasn't included in the approved set.
+  // The tagId parameter holds the real value — literal (e.g. "G-XXXXXXXX") or a
+  // variable reference (e.g. "{{GA4 Measurement ID}}"). Falls back to {{GA4 - ID}}.
+  let measurementIdVariable = '{{GA4 - ID}}';
+  for (const t of originalTags) {
+    if (t.type !== 'googtag') continue;
+    const tagIdParam = (t.parameter || []).find((p: any) => p.key === 'tagId');
+    if (tagIdParam?.value) {
+      measurementIdVariable = tagIdParam.value;
+      break;
+    }
+  }
   log.info({ measurementIdVariable }, 'Using GA4 ID variable for converted tags');
 
   let modifiedCount = 0;
@@ -995,13 +1006,16 @@ async function deployMigrationImpl(
   // because they're not currently used by the tags. If conversion value tracking is needed
   // in the future, these can be added to the Google Ads and Meta Pixel tags.
 
-  // Create one "All Events" trigger that fires on all requests
+  // Create one "All Events" trigger that fires on all events.
+  // Must be type 'customEvent' with no customEventFilter — in sGTM a serverPageview
+  // trigger only fires on pageview-type requests and misses custom events (quiz_start etc).
+  // A customEvent trigger with no filter fires on every event the GA4 client processes.
   const allEventsTrigger = await gtmCall(log, 'triggers.create', () =>
     tm.accounts.containers.workspaces.triggers.create({
       parent: serverWorkspacePath,
       requestBody: {
         name: 'All Events',
-        type: 'serverPageview', // Fires on all incoming server requests
+        type: 'customEvent',
         notes: 'Fires on all incoming requests to the server container'
       }
     })

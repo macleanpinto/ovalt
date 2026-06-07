@@ -15,6 +15,7 @@ This is an npm workspaces monorepo (`apps/api`, `apps/worker`, `apps/web-nextjs`
 ```bash
 # Install
 npm install
+cp .env.example .env                       # first-time only; fill in OAuth credentials
 
 # Local dev — requires LocalStack from docker-compose
 docker compose up -d
@@ -54,8 +55,9 @@ Web (Next.js SSR)  →  API (Fastify on Lambda)  →  SQS  →  Worker (Lambda)
 1. User uploads a GTM container JSON via the web app → API stores metadata in DynamoDB and the raw payload in S3 (`imports` table, `uploaded` status).
 2. User triggers a run → API writes a `runs` row (`queued`) and pushes `{ importId, runId }` onto SQS.
 3. Worker (`apps/worker/src/processor.ts` → `migration/pipeline.ts`) consumes the message:
-   - `loadImport` → `canonical` normalizes container → `engine/applyRuleset` categorizes tags/triggers/variables → `validation` + `provisioning` checks → `buildReport` + `markdown`.
+   - `loadImport` → `canonical.ts` normalizes raw GTM JSON to an internal model → `engine/applyRuleset` categorizes tags/triggers/variables → `validation.ts` checks constraints → `provisioning/` runs GTM API pre-flight checks → `buildReport` + `markdown`.
    - Writes `runs/{runId}/report.json`, `report.md`, `server_blueprint.json` to S3 and updates the run row.
+   - Import statuses: `uploaded → normalized | failed`. Run statuses: `queued → running → completed | needs_review | failed`.
 4. Web polls the run; on user confirmation, the API calls `gtm-migration-deploy.ts` to create workspaces/tags in the user's GTM server container via the GTM API.
 
 **Tenancy:** Every DynamoDB row and artifact is scoped by `organizationId`. Backend enforces this; the UI treats it as invisible (each user effectively has one workspace — multi-tenant agency features are not implemented).
@@ -155,6 +157,10 @@ AWS_PROFILE=tagrelay-prod aws dynamodb update-item \
 ```
 
 Look up `userId` by email via the `email-index` GSI or from `/auth/me`.
+
+## CI / GitHub Actions
+
+Pushing to `main` triggers `.github/workflows/deploy-cdk-production.yml`, which runs a full CDK deploy to production. Non-infra Lambda changes should use the targeted scripts instead (`deploy-api-only.sh` / `deploy-worker-only.sh`) to avoid a full CDK run on every push.
 
 ## Runtime Notes
 
